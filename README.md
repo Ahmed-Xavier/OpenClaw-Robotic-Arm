@@ -2,7 +2,7 @@
 
 Give OpenClaw a body: a UR5e in Gazebo, controlled through an OpenClaw skill,
 following the CLI-bridge pattern from a real working hardware project.
-UPDATE: ROSCLAW MIGHT BE HELPFUL https://github.com/ros-claw/rosclaw
+UPDATE: ROSCLAW plugin MIGHT BE HELPFUL https://github.com/ros-claw/rosclaw
 This isn't a from-scratch design — it's two existing, working repos stitched
 together with a translation layer in between:
 
