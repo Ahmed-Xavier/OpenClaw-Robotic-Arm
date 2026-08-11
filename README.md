@@ -4,6 +4,7 @@ Give OpenClaw a body: a UR5e in Gazebo, controlled through an OpenClaw skill,
 following the CLI-bridge pattern from a real working hardware project.
 UPDATE: ROSCLAW plugin MIGHT BE HELPFUL https://github.com/ros-claw/rosclaw
 i found this repo that doesn't use ubuntu, it's interesting https://github.com/Seeed-Projects/awesome-openclaw-hardware-projects/blob/main/07-robotics/control-soarm101.md
+also found this interesting repo, check it: https://github.com/HKUDS/nanobot
 This isn't a from-scratch design — it's two existing, working repos stitched
 together with a translation layer in between:
 
