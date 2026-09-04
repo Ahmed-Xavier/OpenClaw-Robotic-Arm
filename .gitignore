@@ -167,3 +167,10 @@ cython_debug/
 .idea/
 
 draft
+# MuJoCo runtime dumps
+MJDATA.TXT
+MJMODEL.TXT
+mjmodel.mjb
+mjmodel.xml
+*.png
+!third_party/**
