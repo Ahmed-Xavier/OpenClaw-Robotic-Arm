@@ -91,16 +91,12 @@ openclaw-robotic-arm/
 
 ## Setup
 
-This depends on the [Manipulator-Mujoco](https://github.com/ian-chuang/Manipulator-Mujoco)
-environment package. Known-working versions (pinned due to dm_control/MuJoCo internal API
-churn between versions):
+The [Manipulator-Mujoco](https://github.com/ian-chuang/Manipulator-Mujoco) environment package
+is vendored in this repo under `third_party/manipulator_mujoco/` (MIT licensed — see
+`third_party/manipulator_mujoco/ATTRIBUTION.md`), trimmed to only the Aubo i5 + AG95 gripper
+assets actually used here.
 
-```
-pip install "mujoco==3.2.1" "dm-control==1.0.22"
-```
-
-Then clone and install Manipulator-Mujoco per its own README, and this repo's `robot_api.py`
-imports its registered Gymnasium environment directly.
+Install known-working versions (pinned due to dm_control/MuJoCo internal API churn):
 
 ---
 
