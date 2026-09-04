@@ -1,186 +1,147 @@
-# OpenClaw Embodied Arm (Sim)
+# OpenClaw Embodied Robotics (MuJoCo Edition)
 
-Give OpenClaw a body: a UR5e in Gazebo, controlled through an OpenClaw skill,
-following the CLI-bridge pattern from a real working hardware project.
-UPDATE: ROSCLAW plugin MIGHT BE HELPFUL https://github.com/ros-claw/rosclaw
-i found this repo that doesn't use ubuntu, it's interesting https://github.com/Seeed-Projects/awesome-openclaw-hardware-projects/blob/main/07-robotics/control-soarm101.md
-also found this interesting repo, check it: https://github.com/HKUDS/nanobot.
-THIS REPO S FOR ECHO, i just saved it here to remember it: https://github.com/RobotnikAutomation/robotnik_simulation
-This isn't a from-scratch design — it's two existing, working repos stitched
-together with a translation layer in between:
+> Giving OpenClaw a virtual robotic body — running entirely on MuJoCo, no ROS2/Gazebo required.
 
-| Piece | Source | Role |
-|---|---|---|
-| Simulated body | [`UniversalRobots/Universal_Robots_ROS2_GZ_Simulation`](https://github.com/UniversalRobots/Universal_Robots_ROS2_GZ_Simulation) | UR5e + Gazebo + `ros2_control` + MoveIt 2, ready to run |
-| Agent↔robot bridge pattern | [`proknowdiy/AI-Robotic-Arm-RDK-S100-OpenClaw`](https://github.com/proknowdiy/AI-Robotic-Arm-RDK-S100-OpenClaw) | Proven OpenClaw-skill → CLI → robot-driver architecture, re-pointed at MoveIt 2 instead of an ESP32 |
+This project integrates **OpenClaw** with a simulated robotic arm using **MuJoCo + Gymnasium**
+instead of the original ROS2/Gazebo/MoveIt2 plan (see the `legacy-ros2-gazebo-plan` branch for
+that earlier direction — kept for reference, not actively developed).
+
+The goal is a locally-running embodied AI agent that can perceive a simulated environment,
+reason about tasks, control a robotic arm, and interact with objects — developed and testable
+entirely on a normal Windows machine, no Linux/ROS2 install required for the simulation layer.
 
 ---
 
-## 1. What's actually in the UR5e sim repo
+## Why the pivot from the original plan
 
-Checked directly, not from the repo's own marketing copy.
+The original architecture (see the legacy branch) targeted ROS2 + Gazebo + MoveIt2, which
+requires a full Ubuntu/ROS2 install. This version reaches the same capabilities using:
 
-- Package: `ur_simulation_gz`, launch files `ur_sim_control.launch.py` (raw
-  `ros2_control`, no planning) and `ur_sim_moveit.launch.py` (MoveIt 2 +
-  Gazebo, this is the one we want).
-- **Branch matters.** The repo's `HEAD`/default branch (`ros2`) tracks
-  **Lyrical/Rolling**, not what you're running. There's a dedicated **`jazzy`
-  branch** that matches ROS 2 Jazzy on Ubuntu 24.04 — same distro you already
-  have working on Echo. Clone `-b jazzy`, not the default branch, or you'll
-  fight dependency mismatches for no reason.
-- Standard colcon workspace flow: clone into `src/ur_simulation_gz`, `rosdep
-  install`, `colcon build --symlink-install`, source, then
-  `ros2 launch ur_simulation_gz ur_sim_moveit.launch.py`.
-- No perception, no task logic, no agent hooks — it's purely the simulated
-  body + planner. Everything above that layer is on us.
-
-## 2. What's actually in the RDK-S100 OpenClaw repo
-
-This is a small, real, working project (4DOF arm, ESP32-C3, RDK S100) — not
-just an idea. The architecture is worth stealing exactly because it's already
-proven end-to-end on hardware:
-
-```
-python/
-  arm_api.py         # CLI entrypoint — dispatches string commands to task_executor
-  task_executor.py    # business logic: precondition checks, then calls robot_controller
-  robot_controller.py  # hardware driver: JSON-over-serial to the ESP32
-  scene_detector.py    # OpenCV: fixed pixel regions -> slot contents (cube colors)
-openclaw_skill/
-  robotic-arm.md        # OpenClaw skill definition (YAML frontmatter + instructions)
-```
-
-The actual bridge mechanism: **OpenClaw doesn't call Python functions
-directly.** The skill file tells the agent to shell out —
-`python3 arm_api.py pick A` — and read stdout. `arm_api.py` is a thin
-dispatcher (`scene`, `status`, `pick <slot>`, `drop <side>`, `move <slot>
-<side>`, `sort_red`, `sort_green`, `home`) over `task_executor.py`, which
-does the actual precondition checking (already holding a cube? slot empty?)
-before touching `robot_controller.py`, which talks to the ESP32 over a JSON
-serial protocol (`{"action": "pick_cube", "source": "A"}` → wait for
-`"Done"` or `"ERROR:..."`).
-
-The one rule worth copying verbatim into our skill file is this one, straight
-from `robotic-arm.md`:
-
-> Before any action that depends on slot or bin contents, re-run the scene
-> command. Act on the live scene output, not memory of the previous result.
-
-That's the right defense against an agent hallucinating stale world state —
-we want the same rule for object poses in Gazebo.
-
-**What we are *not* reusing literally:** the A/B/C fixed-pixel-region slot
-detection and the 4DOF serial protocol are specific to that hardware tray.
-Our "driver layer" is MoveIt 2 action calls instead of JSON-over-serial, and
-our "scene layer" is RGB-D + object detection instead of three hardcoded
-pixel boxes.
+| Original plan | This version |
+|---|---|
+| Gazebo simulation | MuJoCo (`mujoco` + `dm_control`) |
+| MoveIt2 (inverse kinematics, planning) | Hand-built Operational Space Controller (OSC) |
+| ROS2 topics for robot state | Direct `physics.data` access via `dm_control` |
+| Ubuntu 24.04 required | Runs on Windows (Python + pip only) |
 
 ---
 
-## 3. Architecture (adapted)
+## Project Goal
 
-```
-                    USER
-                     │
-                     ▼
-             OpenClaw skill (arm.md)
-                     │  shells out, same pattern as robotic-arm.md
-                     ▼
-              robot_api.py (CLI)
-                     │
-        ┌────────────┴────────────┐
-        ▼                         ▼
-  task_executor.py          scene_detector.py
-  (precondition checks,     (RGB-D → object
-   re-check-scene rule)      poses, replaces
-        │                    fixed pixel regions)
-        ▼
-  moveit_driver.py
-  (replaces robot_controller.py:
-   MoveIt 2 action client instead
-   of JSON-over-serial)
-        │
-        ▼
-   ROS 2 / MoveIt 2 / ros2_control
-        │
-        ▼
-   Gazebo — UR5e simulation
-```
-
-Same three-layer separation as the RDK project (CLI dispatcher → task logic
-→ hardware driver), same "OpenClaw shells out and reads stdout" bridge —
-just the bottom two layers swapped for sim/MoveIt 2 instead of
-serial/ESP32.
+- Move the arm to precise positions (**done** — OSC-controlled, live-tracked)
+- Pick and place objects (**done** — see `robot_api.py`)
+- Add camera-based perception (**in progress**)
+- Control via natural language through OpenClaw (**next**)
+- Play Tic-Tac-Toe / Chess in simulation (**future**)
 
 ---
 
-## 4. Repo structure
+## Current Architecture
 
 ```
-openclaw-embodied-arm/
+                 USER
+                   │
+                   ▼
+            ┌─────────────┐
+            │   OpenClaw  │   (not yet wired up — next step)
+            └──────┬──────┘
+                   │
+            OpenClaw Skill (CLI subprocess calls, TBD)
+                   │
+                   ▼
+            ┌─────────────┐
+            │ robot_api.py│
+            │             │
+            │ move_to()   │
+            │ pick()      │
+            │ place()     │
+            │ gripper()   │
+            │ get_state() │
+            └──────┬──────┘
+                   │
+                   ▼
+        MuJoCo + Gymnasium env
+     (manipulator_mujoco/AuboI5Env-v0)
+                   │
+                   ▼
+          OSC Controller (IK)
+                   │
+                   ▼
+             MuJoCo physics
+```
+
+---
+
+## Repository Structure
+
+```
+openclaw-robotic-arm/
+│
 ├── README.md
-├── ur_ws/                       # colcon workspace
-│   └── src/
-│       └── ur_simulation_gz/    # cloned from jazzy branch, upstream, untouched
-├── robot_api/
-│   ├── arm_api.py                # CLI dispatcher (same shape as proknowdiy's)
-│   ├── task_executor.py          # precondition checks + re-check-scene rule
-│   ├── moveit_driver.py          # MoveIt 2 action client (replaces robot_controller.py)
-│   └── scene_detector.py         # RGB-D object detection (replaces fixed pixel regions)
-├── openclaw_skill/
-│   └── robotic-arm.md            # adapted skill definition
-└── docs/
-    └── setup.md
+├── robot_api.py          # Robot abstraction layer (move_to, pick, place, gripper)
+├── requirements.txt
+│
+└── (planned)
+    ├── openclaw_skill/    # OpenClaw-callable CLI wrapper + skill.md
+    ├── perception/        # Camera-based object detection (MuJoCo render + CV)
+    └── tasks/             # Tic-tac-toe, chess logic
 ```
 
 ---
 
-## 5. Roadmap (scoped down — no games, no chess)
+## Setup
 
-Games and multi-object recognition are explicitly parked, not on the
-critical path. Order of operations:
+This depends on the [Manipulator-Mujoco](https://github.com/ian-chuang/Manipulator-Mujoco)
+environment package. Known-working versions (pinned due to dm_control/MuJoCo internal API
+churn between versions):
 
-- [ ] **Phase 0 — Environment**: clone `ur_simulation_gz` on the `jazzy`
-      branch, build workspace, confirm `ur_sim_moveit.launch.py` brings up
-      UR5e + MoveIt 2 in Gazebo with no errors.
-- [ ] **Phase 1 — Manual sim control**: drive the arm through MoveIt 2's own
-      interface (RViz motion planning plugin or a test script) before any
-      agent is involved. Confirm IK and collision checking work.
-- [ ] **Phase 2 — Scene objects**: add a table + a couple of colored cubes to
-      the Gazebo world.
-- [ ] **Phase 3 — Perception**: RGB-D camera in sim, publish 3D object poses
-      (start with color/contour segmentation like the RDK project — no need
-      for a heavy detector against known-color cubes).
-- [ ] **Phase 4 — `robot_api` layer**: build `arm_api.py` /
-      `task_executor.py` / `moveit_driver.py`, CLI-testable without OpenClaw
-      in the loop first (mirrors how the RDK repo lets you run
-      `python3 main.py` standalone before wiring OpenClaw at all).
-- [ ] **Phase 5 — OpenClaw skill**: adapt `robotic-arm.md`, point it at
-      `arm_api.py`, keep the re-check-scene rule.
-- [ ] **Phase 6 — First embodied task**: "pick up the red cube" end-to-end,
-      observe → reason → act → verify.
+```
+pip install "mujoco==3.2.1" "dm-control==1.0.22"
+```
 
-Multimodal local model note: since Phase 3 needs the LLM to reason over
-scene state (not just call tools blindly on text), the model backing
-OpenClaw needs vision input, not just text. Worth deciding early whether
-that model runs locally (same pattern as Echo's qwen3.5:4b on the RTX 4050
-over Tailscale) or against a hosted multimodal API, since it changes the
-latency budget of the observe→act loop.
+Then clone and install Manipulator-Mujoco per its own README, and this repo's `robot_api.py`
+imports its registered Gymnasium environment directly.
 
 ---
 
-## 6. Setup notes
+## Robot Abstraction API
 
-```bash
-export COLCON_WS=~/workspaces/openclaw_arm
-mkdir -p $COLCON_WS/src
-cd $COLCON_WS
-git clone -b jazzy https://github.com/UniversalRobots/Universal_Robots_ROS2_GZ_Simulation.git src/ur_simulation_gz
-rosdep update && rosdep install --ignore-src --from-paths src -y
-colcon build --symlink-install
-source install/setup.bash
-ros2 launch ur_simulation_gz ur_sim_moveit.launch.py
+`robot_api.py` exposes a hardware-independent interface, designed so the same calls will
+later work against a real arm without changing the calling code:
+
+```python
+robot.move_to(x, y, z)
+robot.pick()
+robot.place(x, y, z)
+robot.gripper(value)      # 0.0 = open, 1.0 = closed
+robot.get_state()         # {"holding_cube": bool, "eef_position": [...], "cube_position": [...]}
 ```
 
-If that comes up clean, Phase 0 is done and Phase 1 (manual MoveIt 2 control)
-starts.
+Key design decisions (learned the hard way, see commit history / dev notes):
+- The cube's position is **read live from physics on every `pick()` call**, never cached —
+  an earlier version silently fell back to a hardcoded guess when name-detection failed.
+- The end-effector site is found by **substring match**, not exact name, since `dm_control`
+  prefixes site names (e.g. `aubo_i5/eef_site`) unpredictably depending on model assembly.
+- The fingertip-to-eef vertical offset is **measured from the model at startup**, with a loud
+  warning if it has to fall back to a guessed constant, rather than silently trusting a number
+  that might not match the actual gripper geometry.
+
+---
+
+## Next Steps
+
+1. Wrap `robot_api.py` in a CLI script (`arm_api.py`) callable by OpenClaw as a subprocess,
+   following the pattern used in
+   [AI-Robotic-Arm-RDK-S100-OpenClaw](https://github.com/proknowdiy/AI-Robotic-Arm-RDK-S100-OpenClaw).
+2. Write the OpenClaw skill markdown describing when/how to call each command.
+3. Add camera-based perception (`physics.render()` + object detection) so the agent can
+   locate objects itself instead of relying on a single hardcoded cube.
+4. Extend to Tic-Tac-Toe and Chess once perception + manipulation are both reliable.
+
+---
+
+## Legacy Plan
+
+The original ROS2 + Gazebo + MoveIt2 architecture is preserved on the
+[`legacy-ros2-gazebo-plan`](../../tree/legacy-ros2-gazebo-plan) branch for reference and
+future revisiting if/when a full Ubuntu/ROS2 environment is available.
