@@ -215,6 +215,30 @@ Guard: if `_holding` is already `True`, `pick()` skips immediately and returns c
 
 ---
 
+## Considering: MoveIt Integration
+
+The current custom Jacobian pseudo-inverse IK is sufficient for a single 5-DOF arm in a known,
+static workspace — but it has no notion of collision-awareness or path planning around
+obstacles, only point-to-point motion. MoveIt would be worth revisiting if this project grows
+in any of these directions:
+
+- **Collision-aware planning** — MoveIt builds a 3D planning scene (from the URDF/MJCF + sensor
+  data) and routes around obstacles instead of assuming a clear straight-line path
+- **Multi-arm coordination** — if a second arm is added to the scene, MoveIt's planning scene can
+  coordinate both arms to avoid collisions with each other, which the current per-arm `move_to()`
+  cannot do
+- **Grasp planning** — MoveIt has built-in grasp generation and pick-place pipelines that plug
+  into perception, rather than hand-coded fixed approach vectors like the current side-approach
+  `pick()` logic
+- **ROS2 ecosystem fit** — if this ever moves onto a ROS2-based platform (see legacy plan below),
+  MoveIt is the standard manipulation stack most labs already expect to plug into
+
+Tradeoff: MoveIt brings real setup overhead (SRDF config, planning scene, controller
+integration) that isn't worth it for the current single-arm, static, MuJoCo-only setup — the
+custom IK stays lighter and faster to iterate on until one of the above becomes an actual need.
+
+---
+
 ## Legacy Plan
 
 The original ROS2 + Gazebo + MoveIt2 architecture is preserved on the
