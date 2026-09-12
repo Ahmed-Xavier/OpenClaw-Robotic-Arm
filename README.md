@@ -89,6 +89,113 @@ OpenClaw-Robotic-Arm/
 
 ---
 
+## Installation
+
+This section covers setting up the MuJoCo simulation and Flask REST server on a local machine.
+
+### Prerequisites
+
+- **Operating System:** Windows 10/11 (tested natively on Windows without requiring WSL or Ubuntu).
+- **Python:** Python 3.10+ (tested on Python 3.11.9).
+- **Git**
+
+> [!NOTE]
+> All MuJoCo 3D models, scene definitions (`interactive_scene.xml`, `so_arm100.xml`), and STL mesh assets are vendored directly in `third_party/so_arm100/`. No additional asset downloads, git submodule initializations, or system environment variables are required.
+
+### 1. Clone & Environment Setup
+
+Clone the repository and create a Python virtual environment:
+
+```powershell
+# Clone the repository
+git clone https://github.com/Ahmed-Xavier/OpenClaw-Robotic-Arm.git
+cd OpenClaw-Robotic-Arm
+
+# Create and activate a virtual environment
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+### 2. Install Dependencies
+
+The repository includes a `requirements.txt` specifying the Flask server dependency. The simulation physics and camera pipeline additionally require `mujoco`, `numpy`, and `pillow`:
+
+```powershell
+pip install --upgrade pip
+pip install -r requirements.txt mujoco numpy pillow
+```
+
+> **Core Dependencies:**
+> - `flask` (HTTP REST API layer)
+> - `mujoco` (>= 3.2.0, physics simulation and passive viewer)
+> - `numpy` (>= 1.24, kinematics and state math)
+> - `pillow` (offscreen camera image rendering and saving)
+
+### 3. Running the Server
+
+Start the simulation and HTTP REST server:
+
+```powershell
+python server.py
+```
+
+*(Alternatively, run `Run Server.bat` on Windows).*
+
+> [!WARNING]
+> **Single-Instance Only:** `server.py` instantiates a single global `RobotAPI(render=True)` instance holding the MuJoCo simulation and viewer handle. It runs with `use_reloader=False` and `threaded=False`. Running multiple instances or enabling the Werkzeug reloader will spawn duplicate processes that fight over the MuJoCo viewer and physics state. Ensure only **one** instance of `server.py` is running.
+
+### 4. What a Successful Run Looks Like
+
+When launched successfully:
+
+1. **MuJoCo Viewer Opens:** A native graphical window opens automatically displaying the SO-100 5-DOF arm in its rest pose over the workspace table, along with the red target cube and placement pads. The viewer is interactive and maintains real-time physics (supporting perturbations via `Ctrl` + Right-Click mouse dragging).
+2. **Flask Server Binds:** The server listens on `http://0.0.0.0:8765` (accessible locally at `http://127.0.0.1:8765` or `http://localhost:8765`).
+3. **Console Output:**
+   ```text
+   [robot_api] SO-100 arm initialized and ready.
+   [server] Starting Flask REST server on http://0.0.0.0:8765
+   [server] Endpoints: /move_to  /pick  /place  /gripper  /state  /camera  /reset_home
+    * Serving Flask app 'server'
+    * Debug mode: off
+   WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+    * Running on all addresses (0.0.0.0)
+    * Running on http://127.0.0.1:8765
+    * Running on http://<local-ip>:8765
+   Press CTRL+C to quit
+   ```
+
+### 5. Available REST Endpoints
+
+External clients, scripts, or agent drivers interact with the simulation using standard HTTP JSON calls on port `8765`:
+
+| Endpoint | Method | Payload / Parameters | Description |
+|---|---|---|---|
+| `/move_to` | `POST` | `{"x": float, "y": float, "z": float}` | Moves the end-effector to target coordinates via Jacobian IK. |
+| `/pick` | `POST` | `{}` | Executes the horizontal side-approach pickup sequence for the red cube. |
+| `/place` | `POST` | `{"x": float, "y": float, "z": float}` | Moves the held object to target coordinates, lowers, and releases. |
+| `/gripper` | `POST` | `{"value": float}` | Controls gripper openness (`0.0` = closed, `1.0` = open). |
+| `/state` | `GET` | _None_ | Returns full telemetry snapshot (EEF, cube, gripper, joint angles in radians, sim time). |
+| `/camera` | `GET` | _None_ | Renders wrist camera view and returns `{"path": "<absolute path to PNG>"}`. |
+| `/reset_home` | `POST` | `{}` | Returns the robotic arm to the home rest position. |
+| `/collisions` | `GET` | _None_ | Returns contact pairs detected by MuJoCo during the current step. |
+| `/scenario` | `POST` | `{"name": "A" \| "B" \| "C"}` | Executes predefined routines (Scenario A: Right pad, B: Left pad, C: Inspection wave). |
+
+### Troubleshooting
+
+- **Arm does not move in viewer, but API calls return HTTP 200:**
+  This typically occurs if a zombie or duplicate `server.py` process is already running in the background holding port `8765`. Any new request hits the old process (or an unrendered instance), leaving the visible viewer untouched.
+  
+  To check for and terminate duplicate processes on Windows:
+  ```powershell
+  # Find process IDs listening on port 8765
+  netstat -ano | findstr :8765
+
+  # Kill the offending process by its PID
+  taskkill /PID <PID> /F
+  ```
+
+---
+
 ## Setup
 
 ```bash
