@@ -1,0 +1,147 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "move_to",
+      "description": "Move the robot arm end-effector (grasp site) to an absolute target position [x, y, z] in meters.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "number",
+            "description": "X coordinate in meters (lateral position, reachable range: -0.30 to 0.30)."
+          },
+          "y": {
+            "type": "number",
+            "description": "Y coordinate in meters (forward reach, reachable range: -0.35 to -0.05)."
+          },
+          "z": {
+            "type": "number",
+            "description": "Z coordinate in meters (height above table, reachable range: 0.00 to 0.35)."
+          }
+        },
+        "required": ["x", "y", "z"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "pick",
+      "description": "Pick up the red cube from the table using the autonomous side-approach grasp strategy. No coordinates required.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "place",
+      "description": "Place the currently held object onto the table or pad at target position [x, y, z] in meters and release gripper.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "number",
+            "description": "X coordinate in meters (right pad is +0.15, left pad is -0.15)."
+          },
+          "y": {
+            "type": "number",
+            "description": "Y coordinate in meters (pads are at -0.18)."
+          },
+          "z": {
+            "type": "number",
+            "description": "Z coordinate in meters (pad surface height is 0.015)."
+          }
+        },
+        "required": ["x", "y", "z"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "gripper",
+      "description": "Set the robot arm gripper openness directly. 0.0 is fully open, 1.0 is fully closed.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "number",
+            "description": "Gripper openness ratio from 0.0 (fully open) to 1.0 (fully closed)."
+          }
+        },
+        "required": ["value"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "state",
+      "description": "Query the live simulation telemetry: returns end-effector position, cube position, distance to cube, whether the cube is held, gripper status, and joint angles.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "camera",
+      "description": "Capture an image snapshot from the wrist-mounted camera. Returns the filesystem path to the saved PNG image.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "reset_home",
+      "description": "Return the robot arm to its default home resting position.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "scenario",
+      "description": "Execute a pre-programmed pick-and-place or inspection scenario by name ('A', 'B', or 'C'). A: Pick and place to right pad (+0.15, -0.18, 0.015) then home. B: Pick and place to left pad (-0.15, -0.18, 0.015) then home. C: Inspection wave with camera photo.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": ["A", "B", "C"],
+            "description": "Scenario name: 'A' (place right), 'B' (place left), or 'C' (inspection wave)."
+          }
+        },
+        "required": ["name"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "collisions",
+      "description": "Query currently detected physical contact pairs between robot parts, table, and cube. Useful to check if the arm hit something or is touching an object.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  }
+]
