@@ -32,18 +32,22 @@ Mini Openclaw/
 
 ## Quick Start
 
-### 1. Configuration (Optional)
-Copy `.env.example` to `.env` and set your credentials:
+### 1. Configuration
+For new setups, copy `.env.example` to `.env` (or rename it by removing `.example`):
 ```bash
 cp .env.example .env
 ```
-Inside `.env`:
+Inside your new `.env` file, fill in your details:
 ```env
-TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrSTUvwxYZ
+# Required for Telegram
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+
+# Optional overrides (defaults to local Ollama and local Flask)
 OLLAMA_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=qwen3.5:4b
 FLASK_URL=http://127.0.0.1:8765
 ```
+*(Note: `.env.example` is committed to Git as a clean structure template with blank values. Your private `.env` file is ignored by Git and never uploaded).*
 
 ### 2. Start the Arm Simulation Server
 In the project root, run:

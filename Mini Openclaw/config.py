@@ -8,18 +8,17 @@ from pathlib import Path
 # Base directory for the Mini Openclaw module
 BASE_DIR = Path(__file__).resolve().parent
 
-# Automatically load a local .env (or .env.example as fallback) if present
-for env_name in (".env", ".env.example"):
-    env_candidate = BASE_DIR / env_name
-    if env_candidate.exists():
-        with open(env_candidate, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    val = v.strip().strip('"').strip("'")
-                    if val:
-                        os.environ.setdefault(k.strip(), val)
+# Automatically load a local .env file if present
+ENV_FILE = BASE_DIR / ".env"
+if ENV_FILE.exists():
+    with open(ENV_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                val = v.strip().strip('"').strip("'")
+                if val:
+                    os.environ.setdefault(k.strip(), val)
 
 # Telegram Bot Token
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()

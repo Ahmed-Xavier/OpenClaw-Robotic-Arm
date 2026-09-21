@@ -174,3 +174,10 @@ mjmodel.mjb
 mjmodel.xml
 *.png
 !third_party/**
+
+# Local agent secrets and logs
+.env
+.env.*
+!.env.example
+*.env
+*.jsonl
