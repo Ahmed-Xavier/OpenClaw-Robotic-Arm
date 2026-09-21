@@ -60,4 +60,5 @@ MAX_HISTORY_TURNS = int(os.getenv("MAX_HISTORY_TURNS", "6"))
 
 # File paths
 TOOLS_SCHEMA_PATH = BASE_DIR / "tools_schema.json"
+SOUL_FILE_PATH = BASE_DIR / "SOUL.md"
 LOG_FILE_PATH = BASE_DIR / "turns.jsonl"
