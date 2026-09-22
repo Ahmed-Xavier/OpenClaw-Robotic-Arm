@@ -87,12 +87,15 @@ def move_to():
 
 @app.route("/pick", methods=["POST"])
 def pick():
-    """Pick up the cube using the side-approach strategy.
+    """Pick up the target object (default: cube) using the side-approach strategy.
 
+    Body (optional): {"target": "cube" | "sphere"}
     Returns structured result with grasp_verification block.
     """
     try:
-        result = robot.pick()
+        body = request.get_json(force=True, silent=True) or {}
+        target = body.get("target", "cube") if isinstance(body, dict) else "cube"
+        result = robot.pick(target=target)
         return _ok(result)
     except Exception as e:
         return _err(e)

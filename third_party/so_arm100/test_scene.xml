@@ -29,12 +29,7 @@
             friction="2.0 0.1 0.005" solimp="2 1 0.01" solref="0.01 1"/>
     </body>
 
-    <!-- Manipulatable Sphere -->
-    <body name="blue_sphere" pos="0.08 -0.22 0.014">
-      <joint type="free"/>
-      <geom name="sphere_geom" type="sphere" size="0.014" material="sphere_mat" density="400"
-            friction="2.0 0.1 0.02" solimp="2 1 0.01" solref="0.01 1"/>
-    </body>
+    
 
     <!-- Target drop zones -->
     <site name="target_right" pos="0.15 -0.18 0.005" size="0.018 0.018 0.002" type="box" material="target_mat_right"/>

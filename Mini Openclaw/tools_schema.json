@@ -28,10 +28,16 @@
     "type": "function",
     "function": {
       "name": "pick",
-      "description": "Pick up the red cube using the built-in deterministic grasp routine. Handles open gripper, approach, slide-in, settle, close, and lift internally. Do NOT manually reproduce these steps with move_to and gripper calls. Preconditions: cube must exist, robot must not already be holding it. success=true means the position heuristic confirmed the cube lifted with the arm. success=false with error.code=INVALID_STATE means already holding. success=false with error.code=EXECUTION_FAILED means the cube did not lift.",
+      "description": "Pick up an object (the red cube or the blue sphere) using the built-in deterministic horizontal side-approach grasp routine. Handles open gripper, approach, slide-in, settle, close, and lift internally. Do NOT manually reproduce these steps with move_to and gripper calls. Preconditions: target object must exist, robot must not already be holding it. success=true means the position heuristic confirmed the object lifted with the arm. success=false with error.code=INVALID_STATE means already holding. success=false with error.code=EXECUTION_FAILED means the object did not lift.",
       "parameters": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "target": {
+            "type": "string",
+            "enum": ["cube", "sphere"],
+            "description": "Target object to pick up: 'cube' (default: red cube) or 'sphere' (blue sphere)."
+          }
+        },
         "required": []
       }
     }

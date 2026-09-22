@@ -201,7 +201,15 @@ class RobotArmAgent:
                 return False, f"Scenario '{name}' is unknown. Must be one of {sorted(list(VALID_SCENARIOS))}."
             arguments["name"] = name
 
-        # pick, state, camera, reset_home, collisions take no required params
+        # Pick tool: optional target parameter ("cube" or "sphere", defaults to "cube")
+        elif tool_name == "pick":
+            if "target" in arguments and arguments["target"] is not None:
+                target = str(arguments["target"]).strip().lower()
+                if target not in ("cube", "sphere"):
+                    return False, f"Invalid pick target '{target}'. Must be 'cube' or 'sphere'."
+                arguments["target"] = target
+
+        # state, camera, reset_home, collisions take no required params
         return True, None
 
     # -----------------------------------------------------------------------

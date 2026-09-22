@@ -51,7 +51,10 @@ JAW_OPEN = 1.5
 JAW_CLOSED = 0.0
 
 # Natural home pose for the SO-100 5-DOF arm + gripper
-HOME_QPOS = np.array([0.0, -1.38, 1.79, 1.34, 0.0, JAW_OPEN], dtype=np.float64)
+# Home pose: arm raised clear of the table (EEF ≈ [0, -0.347, 0.202])
+# The old pose [0, -1.38, 1.79, 1.34, 0, OPEN] placed the gripper directly on
+# the cube, causing the 50-step physics settle to fling objects away.
+HOME_QPOS = np.array([0.0, -1.8, 1.5, 0.8, 0.0, JAW_OPEN], dtype=np.float64)
 
 JOINT_NAMES = ["Rotation (Base)", "Pitch (Shoulder)", "Elbow", "Wrist Pitch", "Wrist Roll", "Jaw (Gripper)"]
 
@@ -86,6 +89,9 @@ class RobotAPI:
         )
         self._cube_body_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_BODY, "red_cube"
+        )
+        self._sphere_body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, "blue_sphere"
         )
 
         # Reset to home configuration
@@ -278,7 +284,7 @@ class RobotAPI:
 
         dist_to_cube = float(np.linalg.norm(eef_pos - cube_pos))
 
-        return {
+        st = {
             "holding_cube": self._holding,
             "dist_to_cube": dist_to_cube,
             "eef_position": {
@@ -300,6 +306,17 @@ class RobotAPI:
             "sim_time": float(self.data.time),
         }
 
+        if self._sphere_body_id != -1:
+            sphere_pos = self.data.xpos[self._sphere_body_id].copy()
+            st["sphere_position"] = {
+                "x": float(sphere_pos[0]),
+                "y": float(sphere_pos[1]),
+                "z": float(sphere_pos[2]),
+            }
+            st["dist_to_sphere"] = float(np.linalg.norm(eef_pos - sphere_pos))
+
+        return st
+
     def get_semantic_state(self):
         """Return a concise semantic state suitable for the LLM.
 
@@ -314,13 +331,18 @@ class RobotAPI:
         gripper_label = "open" if openness > 0.5 else "closed"
         robot_label = "holding" if self._holding else "ready"
 
-        return {
+        sem = {
             "robot": robot_label,
             "gripper": gripper_label,
             "holding": self._holding,
             "eef": [round(float(eef[0]), 4), round(float(eef[1]), 4), round(float(eef[2]), 4)],
             "cube": [round(float(cube[0]), 4), round(float(cube[1]), 4), round(float(cube[2]), 4)],
         }
+        if self._sphere_body_id != -1:
+            sphere = self.data.xpos[self._sphere_body_id].copy()
+            sem["sphere"] = [round(float(sphere[0]), 4), round(float(sphere[1]), 4), round(float(sphere[2]), 4)]
+
+        return sem
 
     def print_info(self):
         """Display cleanly formatted simulation telemetry."""
@@ -337,6 +359,10 @@ class RobotAPI:
         print(f" End-Effector:   X: {eef['x']:+.4f} m | Y: {eef['y']:+.4f} m | Z: {eef['z']:+.4f} m")
         print(f" Cube Position:  X: {cube['x']:+.4f} m | Y: {cube['y']:+.4f} m | Z: {cube['z']:+.4f} m")
         print(f" Distance (EEF): {st['dist_to_cube']*100:.2f} cm")
+        if "sphere_position" in st:
+            sph = st["sphere_position"]
+            print(f" Sphere Position:X: {sph['x']:+.4f} m | Y: {sph['y']:+.4f} m | Z: {sph['z']:+.4f} m")
+            print(f" Dist to Sphere: {st['dist_to_sphere']*100:.2f} cm")
         print(f" Gripper State:  {grip['openness']*100:.1f}% Open (Jaw: {grip['raw_rad']:.3f} rad)")
         print("\n Joint Positions:")
         for name, rad in st["joints_rad"].items():
@@ -446,8 +472,8 @@ class RobotAPI:
             "is_closed": self._holding,
         })
 
-    def pick(self, approach_dist=0.12, hover_height=0.08, steps=80):
-        """Pick up the cube with a horizontal side approach.
+    def pick(self, target="cube", approach_dist=0.06, hover_height=0.08, steps=80):
+        """Pick up an object (cube or sphere) with a horizontal side approach.
 
         HIGH-LEVEL DETERMINISTIC SKILL.  Qwen calls pick(); all motion
         sequencing (open → approach → slide-in → settle → close → lift)
@@ -460,42 +486,51 @@ class RobotAPI:
         """
         # Precondition: must not already be holding
         if self._holding:
+            held = getattr(self, "_held_object", "an object") or "an object"
             return self._make_result(
                 "pick",
                 error_code="INVALID_STATE",
-                error_message="Robot is already holding the cube.",
+                error_message=f"Robot is already holding {held}.",
             )
 
-        cube_pos = self.data.xpos[self._cube_body_id].copy()
-        x, y, z = cube_pos[0], cube_pos[1], cube_pos[2]
+        target_str = str(target).strip().lower() if target else "cube"
+        if target_str == "sphere" and self._sphere_body_id != -1:
+            obj_body_id = self._sphere_body_id
+            obj_name = "sphere"
+        else:
+            obj_body_id = self._cube_body_id
+            obj_name = "cube"
 
-        # Direction vector from arm base (origin) toward the cube, XY only
+        obj_pos = self.data.xpos[obj_body_id].copy()
+        x, y, z = obj_pos[0], obj_pos[1], obj_pos[2]
+
+        # Direction vector from arm base (origin) toward the object, XY only
         vec = np.array([x, y, 0.0])
         dist = np.linalg.norm(vec)
         if dist < 1e-6:
             approach_dir = np.array([0.0, -1.0, 0.0])
         else:
-            approach_dir = vec / dist   # unit vector toward cube
+            approach_dir = vec / dist   # unit vector toward object
 
-        # Standoff position: cube height, approach_dist further away from the arm
+        # Standoff position: object height, approach_dist further away from the arm
         sx = x - approach_dir[0] * approach_dist
         sy = y - approach_dir[1] * approach_dist
 
-        print(f"[robot_api] Cube at ({x:+.3f}, {y:+.3f}, {z:+.3f})")
+        print(f"[robot_api] Picking {obj_name} at ({x:+.3f}, {y:+.3f}, {z:+.3f})")
         print(f"[robot_api] Side-approach standoff: ({sx:+.3f}, {sy:+.3f}, {z:+.3f})")
 
-        # Record cube Z before lifting (for grasp heuristic)
-        cube_z_before = float(self.data.xpos[self._cube_body_id][2])
+        # Record object Z before lifting (for grasp heuristic)
+        obj_z_before = float(self.data.xpos[obj_body_id][2])
 
         # 1. Open gripper
         self.gripper(0.0, steps=40)
 
-        # 2. Move to standoff at cube height
-        print("[robot_api] Moving to side standoff...")
+        # 2. Move to standoff at object height
+        print(f"[robot_api] Moving to side standoff...")
         self.move_to(sx, sy, z, steps=steps)
 
         # 3. Slide in horizontally
-        print("[robot_api] Sliding in horizontally to cube...")
+        print(f"[robot_api] Sliding in horizontally to {obj_name}...")
         self.move_to(x, y, z, steps=steps)
 
         # 4. Settle
@@ -535,43 +570,45 @@ class RobotAPI:
         self.move_to(x, y, z + hover_height, steps=steps)
 
         # Phase 4 — Position-heuristic grasp verification
-        # Check whether the cube actually rose with the arm.
-        cube_z_after = float(self.data.xpos[self._cube_body_id][2])
-        cube_z_delta = cube_z_after - cube_z_before
-        grasp_verified = cube_z_delta >= GRASP_LIFT_THRESHOLD_M
+        # Check whether the object actually rose with the arm.
+        obj_z_after = float(self.data.xpos[obj_body_id][2])
+        obj_z_delta = obj_z_after - obj_z_before
+        grasp_verified = obj_z_delta >= GRASP_LIFT_THRESHOLD_M
 
-        print(f"[robot_api] Cube Z: before={cube_z_before:.4f} after={cube_z_after:.4f} "
-              f"delta={cube_z_delta:.4f} verified={grasp_verified}")
+        print(f"[robot_api] {obj_name.capitalize()} Z: before={obj_z_before:.4f} after={obj_z_after:.4f} "
+              f"delta={obj_z_delta:.4f} verified={grasp_verified}")
 
         grasp_verification = {
             "method": "position_heuristic",
             "verified": grasp_verified,
-            "cube_z_before": round(cube_z_before, 4),
-            "cube_z_after": round(cube_z_after, 4),
-            "cube_z_delta": round(cube_z_delta, 4),
+            "object": obj_name,
+            "object_z_before": round(obj_z_before, 4),
+            "object_z_after": round(obj_z_after, 4),
+            "object_z_delta": round(obj_z_delta, 4),
             "threshold": GRASP_LIFT_THRESHOLD_M,
         }
 
         if not grasp_verified:
-            # The gripper closed but the cube didn't move with it — grasp failed.
-            # Reset holding state.
+            # The gripper closed but the object didn't move with it — grasp failed.
             self._holding = False
+            self._held_object = None
             return self._make_result(
                 "pick",
                 result={
                     "holding": False,
-                    "object": "cube",
+                    "object": obj_name,
                     "grasp_verification": grasp_verification,
                 },
                 error_code="EXECUTION_FAILED",
-                error_message="Cube did not move with the gripper during the lift.",
+                error_message=f"{obj_name.capitalize()} did not move with the gripper during the lift.",
             )
 
         # Grasp verified — authoritative holding state set here, NOT in gripper()
         self._holding = True
+        self._held_object = obj_name
         return self._make_result("pick", result={
             "holding": True,
-            "object": "cube",
+            "object": obj_name,
             "grasp_verification": grasp_verification,
         })
 
@@ -597,24 +634,28 @@ class RobotAPI:
         if not ok:
             return self._make_result("place", error_code=err_code, error_message=err_msg)
 
-        print(f"[robot_api] Placing at ({x:+.3f}, {y:+.3f}, {z:+.3f})...")
+        held_obj = getattr(self, "_held_object", "cube") or "cube"
+        obj_id = self._sphere_body_id if held_obj == "sphere" and self._sphere_body_id != -1 else self._cube_body_id
+
+        print(f"[robot_api] Placing {held_obj} at ({x:+.3f}, {y:+.3f}, {z:+.3f})...")
         self.move_to(x, y, z + hover_height, steps=steps)
         self.move_to(x, y, z, steps=steps)
         self.gripper(0.0, steps=50)   # Open gripper — release
-        self._holding = False          # Authoritative: cube released
+        self._holding = False          # Authoritative: object released
+        self._held_object = None
         self.move_to(x, y, z + hover_height, steps=steps)
 
-        # Measure actual cube position after release
-        cube_pos = self.data.xpos[self._cube_body_id].copy()
+        # Measure actual object position after release
+        obj_pos = self.data.xpos[obj_id].copy()
         target_pos = np.array([x, y, z], dtype=np.float64)
-        target_error = float(np.linalg.norm(cube_pos - target_pos))
+        target_error = float(np.linalg.norm(obj_pos - target_pos))
 
         return self._make_result("place", result={
             "released": True,
-            "object": "cube",
-            "position": [round(float(cube_pos[0]), 4),
-                         round(float(cube_pos[1]), 4),
-                         round(float(cube_pos[2]), 4)],
+            "object": held_obj,
+            "position": [round(float(obj_pos[0]), 4),
+                         round(float(obj_pos[1]), 4),
+                         round(float(obj_pos[2]), 4)],
             "target_error": round(target_error, 4),
         })
 

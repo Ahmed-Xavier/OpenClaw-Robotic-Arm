@@ -146,6 +146,19 @@ class TestSchemaAndValidation(unittest.TestCase):
         self.assertFalse(valid)
         self.assertIn("Unknown tool", err)
 
+    def test_validation_pick_target(self):
+        valid, err = self.agent.validate_tool_call("pick", {})
+        self.assertTrue(valid)
+        valid, err = self.agent.validate_tool_call("pick", {"target": "cube"})
+        self.assertTrue(valid)
+        valid, err = self.agent.validate_tool_call("pick", {"target": "sphere"})
+        self.assertTrue(valid)
+        valid, err = self.agent.validate_tool_call("pick", {"target": "SPHERE"})
+        self.assertTrue(valid)
+        valid, err = self.agent.validate_tool_call("pick", {"target": "cylinder"})
+        self.assertFalse(valid)
+        self.assertIn("Invalid pick target", err)
+
 
 # ---------------------------------------------------------------------------
 # 2. Structured result contract
