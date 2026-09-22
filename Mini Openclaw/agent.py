@@ -3,12 +3,17 @@ agent.py — Lightweight Robot Arm Agent.
 
 Handles:
 - Loading tools schema from tools_schema.json
-- Rejection of out-of-envelope coordinates before calling Flask
+- Rejection of out-of-envelope coordinates before calling Flask (intent validation)
 - Communicating with local Ollama (/api/chat) with native tool calling
 - Communicating with Flask REST server (server.py)
-- Bounded multi-step tool execution loop (cap at MAX_TOOL_STEPS)
+- Bounded multi-step tool execution loop
+  - MAX_AGENT_ROUNDS: Ollama reasoning invocations
+  - MAX_TOOL_CALLS_PER_TURN: physical tool calls
 - Rolling conversation history (last MAX_HISTORY_TURNS)
-- JSONL turn logging
+- JSONL turn logging with explicit failure types
+- Optional status_callback for Telegram UX (Phases 9, 10, 16)
+- reset_conversation() for /new (Phase 11)
+- resolve_semantic_target() for semantic world model (Phase 15)
 """
 
 import json
@@ -18,7 +23,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
@@ -28,8 +33,9 @@ from config import (
     GRIPPER_RANGE,
     KNOWN_POSITIONS,
     LOG_FILE_PATH,
+    MAX_AGENT_ROUNDS,
     MAX_HISTORY_TURNS,
-    MAX_TOOL_STEPS,
+    MAX_TOOL_CALLS_PER_TURN,
     OLLAMA_MODEL,
     OLLAMA_TIMEOUT_SECONDS,
     OLLAMA_URL,
@@ -40,6 +46,19 @@ from config import (
 )
 
 logger = logging.getLogger("RobotArmAgent")
+
+# ---------------------------------------------------------------------------
+# Phase 10 — Explicit failure type constants
+# ---------------------------------------------------------------------------
+# These are used in the returned result dict and in turns.jsonl.
+# They distinguish MODEL failures from TOOL failures from PHYSICAL failures.
+
+FAILURE_MODEL_FAILED_TO_PLAN = "MODEL_FAILED_TO_PLAN"
+FAILURE_MODEL_TIMED_OUT = "MODEL_TIMED_OUT"
+FAILURE_TOOL_REJECTED = "TOOL_REJECTED"          # agent-side validation rejected the call
+FAILURE_TOOL_FAILED = "TOOL_FAILED"              # physical action returned success=false
+FAILURE_EXECUTION_INCOMPLETE = "EXECUTION_INCOMPLETE"  # limits reached before finishing
+FAILURE_FINAL_RESPONSE_FAILED = "FINAL_RESPONSE_FAILED"  # action OK, LLM reply timed out
 
 
 def load_soul(soul_path: Path = SOUL_FILE_PATH) -> str:
@@ -53,6 +72,23 @@ def load_soul(soul_path: Path = SOUL_FILE_PATH) -> str:
 
 # Module-level default system prompt
 SYSTEM_PROMPT = load_soul()
+
+
+# ---------------------------------------------------------------------------
+# Phase 15 — Semantic world model helper
+# ---------------------------------------------------------------------------
+
+def resolve_semantic_target(name: str) -> Optional[Dict[str, float]]:
+    """Resolve a semantic location name to absolute coordinates.
+
+    Example:
+        resolve_semantic_target("right_pad")
+        -> {"x": 0.15, "y": -0.18, "z": 0.015}
+
+    Returns None if the name is unknown.
+    """
+    key = name.strip().lower().replace(" ", "_")
+    return KNOWN_POSITIONS.get(key)
 
 
 class RobotArmAgent:
@@ -90,11 +126,14 @@ class RobotArmAgent:
             return json.load(f)
 
     # -----------------------------------------------------------------------
-    # Argument Validation (Rejection before Flask)
+    # Argument Validation (intent-level rejection before Flask)
     # -----------------------------------------------------------------------
 
     def validate_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
         """Validate tool arguments against required types and physical envelope.
+
+        This is INTENT validation — the agent's first gate.
+        RobotAPI performs independent PHYSICAL safety validation regardless.
 
         Rejects invalid calls with an explanatory message. Never silently clamps.
         Returns:
@@ -173,6 +212,7 @@ class RobotArmAgent:
         """Send HTTP request to the Flask robot arm server.
 
         Handles network errors, timeouts, and non-200 responses gracefully.
+        Returns the JSON dict from Flask, or an error dict on failure.
         """
         endpoint = f"{self.flask_url}/{tool_name}"
         try:
@@ -249,7 +289,6 @@ class RobotArmAgent:
         if len(history) <= 1:
             return
 
-        # Find user message indices to count turns
         system_msg = history[0]
         messages = history[1:]
 
@@ -258,6 +297,21 @@ class RobotArmAgent:
             cutoff_idx = user_indices[-MAX_HISTORY_TURNS]
             trimmed_messages = messages[cutoff_idx:]
             self.histories[chat_id] = [system_msg] + trimmed_messages
+
+    # -----------------------------------------------------------------------
+    # Phase 11 — /new conversation reset
+    # -----------------------------------------------------------------------
+
+    def reset_conversation(self, chat_id: int) -> None:
+        """Clear conversation history for this chat.
+
+        Called directly by bot.py when the user sends /new.
+        Must NOT go through Qwen.
+        """
+        self.histories[chat_id] = [
+            {"role": "system", "content": self.system_prompt}
+        ]
+        logger.info("Conversation history reset for chat %s.", chat_id)
 
     # -----------------------------------------------------------------------
     # Logging
@@ -272,18 +326,53 @@ class RobotArmAgent:
             logger.error("Failed to write turn log: %s", e)
 
     # -----------------------------------------------------------------------
-    # Main Agent Loop (per Telegram message)
+    # Phase 10 — Human-readable action label for status callbacks
     # -----------------------------------------------------------------------
 
-    def process_message(self, user_text: str, chat_id: int = 0) -> Dict[str, Any]:
-        """Process one incoming message from Telegram.
+    @staticmethod
+    def _action_label(tool_name: str, arguments: Dict[str, Any]) -> str:
+        """Map a tool call to a user-facing status string."""
+        labels = {
+            "pick": "Picking up the cube...",
+            "place": "Placing the cube...",
+            "move_to": "Moving to position...",
+            "gripper": "Adjusting gripper...",
+            "reset_home": "Returning to home position...",
+            "state": "Checking state...",
+            "camera": "Capturing camera image...",
+            "collisions": "Checking collisions...",
+            "scenario": f"Running scenario {arguments.get('name', '')}...",
+        }
+        return labels.get(tool_name, f"Executing {tool_name}...")
+
+    # -----------------------------------------------------------------------
+    # Main Agent Loop (per Telegram message / CLI message)
+    # -----------------------------------------------------------------------
+
+    def process_message(
+        self,
+        user_text: str,
+        chat_id: int = 0,
+        status_callback: Optional[Callable[[str, str, Any], None]] = None,
+    ) -> Dict[str, Any]:
+        """Process one incoming message.
+
+        Args:
+            user_text:       The user's message text.
+            chat_id:         Telegram chat ID (or 0 for CLI).
+            status_callback: Optional callback(event, tool_name, data) for
+                             real-time Telegram status updates (Phase 16).
+                             Events: "started", "completed", "failed".
 
         Returns:
             {
-                "reply": str,              # text response for Telegram
-                "photos": List[str],       # filepaths of camera images to send
-                "tool_calls": List[dict],  # tool calls executed during this turn
-                "error": Optional[str]     # error message if a critical failure occurred
+                "reply":               str,         # text for the user
+                "photos":              List[str],   # camera image paths
+                "tool_calls":          List[dict],  # tool calls executed
+                "error":               str | None,  # critical failure message
+                "failure_type":        str | None,  # Phase 10 failure type
+                "agent_rounds":        int,         # Ollama invocations used
+                "physical_tool_calls": int,         # robot actions executed
             }
         """
         start_time = datetime.now(timezone.utc).isoformat()
@@ -292,26 +381,58 @@ class RobotArmAgent:
         # Append incoming user turn
         history.append({"role": "user", "content": user_text})
 
-        tool_calls_executed = []
-        photos_captured = []
+        tool_calls_executed: List[Dict[str, Any]] = []
+        photos_captured: List[str] = []
         final_reply = ""
         critical_error = None
+        failure_type = None
+        agent_rounds = 0
+        physical_tool_calls_count = 0
 
-        # Multi-step tool-calling loop (bounded to MAX_TOOL_STEPS)
-        steps = 0
-        while steps < MAX_TOOL_STEPS:
-            steps += 1
+        # ---------------------------------------------------------------
+        # Phase 8 — bounded loop with two distinct limits:
+        #   MAX_AGENT_ROUNDS:      Ollama reasoning invocations
+        #   MAX_TOOL_CALLS_PER_TURN: physical tool calls
+        # ---------------------------------------------------------------
+        while agent_rounds < MAX_AGENT_ROUNDS:
+            agent_rounds += 1
+
+            # Phase 9 — call Ollama; distinguish timeout from other errors
             try:
                 ollama_resp = self._call_ollama(history)
-            except Exception as e:
-                critical_error = str(e)
-                final_reply = f"Error communicating with AI service: {e}"
+            except RuntimeError as e:
+                err_str = str(e)
+                if "timed out" in err_str.lower():
+                    failure_type = FAILURE_MODEL_TIMED_OUT
+                else:
+                    failure_type = FAILURE_MODEL_FAILED_TO_PLAN
+                critical_error = err_str
+
+                # Phase 9 — if physical work was already done, report it honestly
+                if tool_calls_executed:
+                    last_tc = tool_calls_executed[-1]
+                    last_result = last_tc.get("response", {})
+                    if isinstance(last_result, dict) and last_result.get("success"):
+                        action = last_result.get("action", last_tc["name"])
+                        final_reply = (
+                            f"Physical action '{action}' completed successfully. "
+                            f"However, I couldn't generate a final response because the model "
+                            f"{'timed out' if failure_type == FAILURE_MODEL_TIMED_OUT else 'failed'}. "
+                            f"Please check the robot state for details."
+                        )
+                        failure_type = FAILURE_FINAL_RESPONSE_FAILED
+                    else:
+                        final_reply = f"Error communicating with AI service: {err_str}"
+                else:
+                    final_reply = f"Error communicating with AI service: {err_str}"
                 break
 
             msg = ollama_resp.get("message", {})
             raw_tool_calls = msg.get("tool_calls", [])
 
+            # ---------------------------------------------------------------
             # Case A: Model issued tool calls
+            # ---------------------------------------------------------------
             if raw_tool_calls:
                 history.append(msg)
 
@@ -321,30 +442,109 @@ class RobotArmAgent:
                     arguments = func.get("arguments", {})
                     call_id = tc.get("id", f"call_{int(time.time()*1000)}")
 
-                    # 1. Validate arguments BEFORE touching Flask
+                    # Phase 8 — enforce physical tool call limit
+                    if physical_tool_calls_count >= MAX_TOOL_CALLS_PER_TURN:
+                        logger.warning(
+                            "Physical tool call limit (%d) reached. Stopping tool execution.",
+                            MAX_TOOL_CALLS_PER_TURN,
+                        )
+                        # Feed limit notice back to model so it knows
+                        tool_result = {
+                            "success": False,
+                            "action": tool_name,
+                            "result": None,
+                            "error": {
+                                "code": "EXECUTION_INCOMPLETE",
+                                "message": (
+                                    f"Physical tool call limit ({MAX_TOOL_CALLS_PER_TURN}) "
+                                    "reached. No further robot actions will be executed."
+                                ),
+                            },
+                        }
+                        failure_type = FAILURE_EXECUTION_INCOMPLETE
+                        history.append({
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "name": tool_name,
+                            "content": json.dumps(tool_result, ensure_ascii=False),
+                        })
+                        tool_calls_executed.append({
+                            "name": tool_name,
+                            "arguments": arguments,
+                            "valid": False,
+                            "tool_success": False,
+                            "failure_type": FAILURE_EXECUTION_INCOMPLETE,
+                            "response": tool_result,
+                        })
+                        continue
+
+                    # Phase 9/10 — Validate arguments BEFORE touching Flask
                     is_valid, err_msg = self.validate_tool_call(tool_name, arguments)
                     if not is_valid:
-                        # Feed the validation rejection back to model as observation
                         tool_result = {
-                            "status": "rejected",
-                            "reason": err_msg,
-                            "clarification_needed": True
+                            "success": False,
+                            "action": tool_name,
+                            "result": None,
+                            "error": {
+                                "code": "TOOL_REJECTED",
+                                "message": err_msg,
+                            },
+                            "clarification_needed": True,
                         }
                         tool_calls_executed.append({
                             "name": tool_name,
                             "arguments": arguments,
                             "valid": False,
-                            "response": tool_result
+                            "tool_success": False,
+                            "failure_type": FAILURE_TOOL_REJECTED,
+                            "response": tool_result,
                         })
                     else:
-                        # 2. Call Flask endpoint
+                        # Phase 16 — status callback: action started
+                        if status_callback is not None:
+                            try:
+                                status_callback("started", tool_name, arguments)
+                            except Exception:
+                                pass
+
+                        # Execute the Flask endpoint
                         flask_res = self.execute_flask_tool(tool_name, arguments)
                         tool_result = flask_res
+
+                        # Determine physical success / failure type
+                        tool_success = True
+                        tc_failure_type = None
+
+                        if isinstance(flask_res, dict):
+                            if "error" in flask_res and "success" not in flask_res:
+                                # Flask-level transport error (connection, timeout, etc.)
+                                tool_success = False
+                                tc_failure_type = FAILURE_TOOL_FAILED
+                            elif flask_res.get("success") is False:
+                                # Structured RobotAPI failure
+                                tool_success = False
+                                tc_failure_type = FAILURE_TOOL_FAILED
+                                if failure_type is None:
+                                    failure_type = FAILURE_TOOL_FAILED
+
+                        # Phase 16 — status callback: completed or failed
+                        if status_callback is not None:
+                            try:
+                                if tool_success:
+                                    status_callback("completed", tool_name, flask_res)
+                                else:
+                                    status_callback("failed", tool_name, flask_res)
+                            except Exception:
+                                pass
+
+                        physical_tool_calls_count += 1
                         tool_calls_executed.append({
                             "name": tool_name,
                             "arguments": arguments,
                             "valid": True,
-                            "response": tool_result
+                            "tool_success": tool_success,
+                            "failure_type": tc_failure_type,
+                            "response": tool_result,
                         })
 
                         # If camera snapshot was taken, collect image path
@@ -358,38 +558,85 @@ class RobotArmAgent:
                         "role": "tool",
                         "tool_call_id": call_id,
                         "name": tool_name,
-                        "content": json.dumps(tool_result, ensure_ascii=False)
+                        "content": json.dumps(tool_result, ensure_ascii=False),
                     })
 
-                # Continue the loop so the model can inspect observations and continue or finish
+                # Continue the loop so the model can observe and continue / finish
                 continue
 
+            # ---------------------------------------------------------------
             # Case B: Model returned plain text (final reply or question)
+            # ---------------------------------------------------------------
             content = msg.get("content", "").strip()
             final_reply = content
             history.append({"role": "assistant", "content": content})
             break
 
-        # Fallback if bounded loop exhausted without plain text
+        # ---------------------------------------------------------------
+        # Phase 8/9 — Handle loop exhaustion
+        # ---------------------------------------------------------------
         if not final_reply and not critical_error:
             if tool_calls_executed:
-                final_reply = "Completed requested actions."
+                # Summarize what actually happened rather than claiming completion
+                executed_names = [tc["name"] for tc in tool_calls_executed if tc["valid"]]
+                successful = [tc["name"] for tc in tool_calls_executed if tc.get("tool_success")]
+                failed = [tc["name"] for tc in tool_calls_executed if not tc.get("tool_success")]
+
+                parts = []
+                if successful:
+                    parts.append(f"Completed: {', '.join(successful)}")
+                if failed:
+                    parts.append(f"Failed: {', '.join(failed)}")
+
+                final_reply = (
+                    f"Agent round limit reached. {' | '.join(parts)}. "
+                    "Request may be incomplete."
+                )
+                failure_type = failure_type or FAILURE_EXECUTION_INCOMPLETE
             else:
                 final_reply = "I could not complete the request within the allowed steps."
+                failure_type = failure_type or FAILURE_EXECUTION_INCOMPLETE
 
         # Trim conversation history
         self._trim_history(chat_id)
 
-        # Log turn to JSONL
+        # Phase 19 — Log turn with explicit failure fields
         turn_log = {
             "timestamp": start_time,
             "chat_id": chat_id,
             "user_message": user_text,
-            "steps": steps,
-            "tool_calls": tool_calls_executed,
+            "agent_rounds": agent_rounds,
+            "physical_tool_calls_count": physical_tool_calls_count,
+            "tool_calls": [
+                {
+                    "name": tc["name"],
+                    "arguments": tc["arguments"],
+                    "valid": tc["valid"],
+                    "tool_success": tc.get("tool_success"),
+                    "failure_type": tc.get("failure_type"),
+                    # Log structured result (not full raw state dumps)
+                    "response_success": (
+                        tc["response"].get("success")
+                        if isinstance(tc["response"], dict)
+                        else None
+                    ),
+                    "response_action": (
+                        tc["response"].get("action")
+                        if isinstance(tc["response"], dict)
+                        else None
+                    ),
+                    "response_error": (
+                        tc["response"].get("error")
+                        if isinstance(tc["response"], dict)
+                        else None
+                    ),
+                }
+                for tc in tool_calls_executed
+            ],
             "photos": photos_captured,
             "final_reply": final_reply,
-            "error": critical_error
+            "failure_type": failure_type,
+            "error": critical_error,
         }
         self._log_turn(turn_log)
 
@@ -397,5 +644,8 @@ class RobotArmAgent:
             "reply": final_reply,
             "photos": photos_captured,
             "tool_calls": tool_calls_executed,
-            "error": critical_error
+            "error": critical_error,
+            "failure_type": failure_type,
+            "agent_rounds": agent_rounds,
+            "physical_tool_calls": physical_tool_calls_count,
         }

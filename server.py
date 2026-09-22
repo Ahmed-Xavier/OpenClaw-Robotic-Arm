@@ -11,18 +11,23 @@ POST /move_to      {"x": float, "y": float, "z": float}
 POST /pick         {}
 POST /place        {"x": float, "y": float, "z": float}
 POST /gripper      {"value": float}
-GET  /state
+GET  /state        -> concise semantic state (for agents / LLM)
+GET  /state/full   -> full MuJoCo debug telemetry
 GET  /camera       -> {"path": "<absolute path to saved PNG>"}
 POST /reset_home   {}
+GET  /collisions   -> current contact pairs
+POST /scenario     {"name": "A" | "B" | "C"}
 
-All successful responses are JSON.  Errors return {"error": "<message>"} with
-HTTP 400 so a bad request never crashes the simulation process.
+All physical action endpoints return the structured RobotAPI result:
+    {"success": bool, "action": str, "result": {...}, "error": {...}|null}
+
+Errors return {"error": "<message>"} with HTTP 400 on unexpected exceptions.
 
 Run
 ---
     python server.py
 
-The server binds to 127.0.0.1:8765.  debug=False and use_reloader=False are
+The server binds to 0.0.0.0:8765.  debug=False and use_reloader=False are
 required: the Werkzeug reloader would fork a second process and instantiate a
 second RobotAPI / MuJoCo viewer, which breaks the simulation.
 """
@@ -57,12 +62,16 @@ def _err(exc, status=400):
 
 
 # ---------------------------------------------------------------------------
-# Endpoints
+# Physical-action endpoints — return the structured RobotAPI result contract
 # ---------------------------------------------------------------------------
 
 @app.route("/move_to", methods=["POST"])
 def move_to():
-    """Move end-effector to an absolute [x, y, z] position."""
+    """Move end-effector to an absolute [x, y, z] position.
+
+    RobotAPI validates the target independently; safety cannot be bypassed.
+    Returns structured result: {"success", "action", "result", "error"}.
+    """
     try:
         body = request.get_json(force=True) or {}
         x = float(body["x"])
@@ -70,13 +79,18 @@ def move_to():
         z = float(body["z"])
         result = robot.move_to(x, y, z)
         return _ok(result)
+    except (KeyError, TypeError, ValueError) as e:
+        return _err(f"Invalid request body: {e}")
     except Exception as e:
         return _err(e)
 
 
 @app.route("/pick", methods=["POST"])
 def pick():
-    """Pick up the cube using the side-approach strategy."""
+    """Pick up the cube using the side-approach strategy.
+
+    Returns structured result with grasp_verification block.
+    """
     try:
         result = robot.pick()
         return _ok(result)
@@ -86,7 +100,10 @@ def pick():
 
 @app.route("/place", methods=["POST"])
 def place():
-    """Place the held object at an absolute [x, y, z] position."""
+    """Place the held object at an absolute [x, y, z] position.
+
+    Returns NOT_HOLDING if robot is not currently holding the cube.
+    """
     try:
         body = request.get_json(force=True) or {}
         x = float(body["x"])
@@ -94,6 +111,8 @@ def place():
         z = float(body["z"])
         result = robot.place(x, y, z)
         return _ok(result)
+    except (KeyError, TypeError, ValueError) as e:
+        return _err(f"Invalid request body: {e}")
     except Exception as e:
         return _err(e)
 
@@ -106,13 +125,41 @@ def gripper():
         value = float(body["value"])
         result = robot.gripper(value)
         return _ok(result)
+    except (KeyError, TypeError, ValueError) as e:
+        return _err(f"Invalid request body: {e}")
     except Exception as e:
         return _err(e)
 
 
+@app.route("/reset_home", methods=["POST"])
+def reset_home():
+    """Return the arm to its home rest position."""
+    try:
+        result = robot.reset_home()
+        return _ok(result)
+    except Exception as e:
+        return _err(e)
+
+
+# ---------------------------------------------------------------------------
+# State endpoints
+# ---------------------------------------------------------------------------
+
 @app.route("/state", methods=["GET"])
 def state():
-    """Return a full telemetry snapshot of the arm and simulation."""
+    """Return a concise semantic state suitable for the LLM agent.
+
+    Use /state/full for detailed MuJoCo debug telemetry.
+    """
+    try:
+        return _ok(robot.get_semantic_state())
+    except Exception as e:
+        return _err(e)
+
+
+@app.route("/state/full", methods=["GET"])
+def state_full():
+    """Return full MuJoCo simulation telemetry for debugging."""
     try:
         return _ok(robot.get_state())
     except Exception as e:
@@ -132,17 +179,6 @@ def camera():
 
         saved_path = robot.save_camera_image(filepath=tmp.name)
         return _ok({"path": os.path.abspath(saved_path)})
-    except Exception as e:
-        return _err(e)
-
-
-@app.route("/reset_home", methods=["POST"])
-def reset_home():
-    """Return the arm to its home rest position."""
-    try:
-        robot.reset_home()
-        # reset_home() returns None, so fall back to current state.
-        return _ok(robot.get_state())
     except Exception as e:
         return _err(e)
 
@@ -188,7 +224,7 @@ def scenario():
     B  — Pick cube, place at left pad (-0.15, -0.18, 0.015), return home.
     C  — Inspection wave: move up, save photo, sweep left/right, return home.
 
-    Returns get_state() on success, or {"error": ...} with HTTP 400.
+    Returns get_semantic_state() on success, or {"error": ...} with HTTP 400.
     """
     try:
         body = request.get_json(force=True) or {}
@@ -211,7 +247,7 @@ def scenario():
         else:
             return _err("unknown scenario")
 
-        return _ok(robot.get_state())
+        return _ok(robot.get_semantic_state())
     except Exception as e:
         return _err(e)
 
@@ -222,7 +258,10 @@ def scenario():
 
 if __name__ == "__main__":
     print("[server] Starting Flask REST server on http://0.0.0.0:8765")
-    print("[server] Endpoints: /move_to  /pick  /place  /gripper  /state  /camera  /reset_home")
+    print("[server] Endpoints:")
+    print("[server]   POST /move_to  POST /pick  POST /place  POST /gripper")
+    print("[server]   POST /reset_home  GET /state  GET /state/full")
+    print("[server]   GET /camera  GET /collisions  POST /scenario")
     app.run(
         host="0.0.0.0",
         port=8765,

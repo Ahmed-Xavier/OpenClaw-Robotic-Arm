@@ -3,21 +3,21 @@
     "type": "function",
     "function": {
       "name": "move_to",
-      "description": "Move the robot arm end-effector (grasp site) to an absolute target position [x, y, z] in meters.",
+      "description": "Move the robot arm end-effector to an absolute [x, y, z] target in meters. RobotAPI validates the target independently — safety cannot be bypassed. The returned result is authoritative: check success=true before treating the move as complete. On success, result contains requested, actual, and position_error (m). On failure, error.code is IK_FAILED or OUT_OF_BOUNDS. Do NOT call this to manually reproduce pick/place internals.",
       "parameters": {
         "type": "object",
         "properties": {
           "x": {
             "type": "number",
-            "description": "X coordinate in meters (lateral position, reachable range: -0.30 to 0.30)."
+            "description": "X coordinate in meters (lateral, reachable: -0.30 to 0.30)."
           },
           "y": {
             "type": "number",
-            "description": "Y coordinate in meters (forward reach, reachable range: -0.35 to -0.05)."
+            "description": "Y coordinate in meters (forward reach, reachable: -0.35 to -0.05)."
           },
           "z": {
             "type": "number",
-            "description": "Z coordinate in meters (height above table, reachable range: 0.00 to 0.35)."
+            "description": "Z coordinate in meters (height above table, reachable: 0.00 to 0.35)."
           }
         },
         "required": ["x", "y", "z"]
@@ -28,7 +28,7 @@
     "type": "function",
     "function": {
       "name": "pick",
-      "description": "Pick up the red cube from the table using the autonomous side-approach grasp strategy. No coordinates required.",
+      "description": "Pick up the red cube using the built-in deterministic grasp routine. Handles open gripper, approach, slide-in, settle, close, and lift internally. Do NOT manually reproduce these steps with move_to and gripper calls. Preconditions: cube must exist, robot must not already be holding it. success=true means the position heuristic confirmed the cube lifted with the arm. success=false with error.code=INVALID_STATE means already holding. success=false with error.code=EXECUTION_FAILED means the cube did not lift.",
       "parameters": {
         "type": "object",
         "properties": {},
@@ -40,21 +40,21 @@
     "type": "function",
     "function": {
       "name": "place",
-      "description": "Place the currently held object onto the table or pad at target position [x, y, z] in meters and release gripper.",
+      "description": "Place the currently held cube at an absolute [x, y, z] target position and release the gripper. Precondition: robot must be holding the cube (success=false with NOT_HOLDING if not). The tool moves to the target, releases, and returns the actual cube position and target_error (m). success=true means the cube was released near the target. Known locations: right pad (0.15, -0.18, 0.015), left pad (-0.15, -0.18, 0.015).",
       "parameters": {
         "type": "object",
         "properties": {
           "x": {
             "type": "number",
-            "description": "X coordinate in meters (right pad is +0.15, left pad is -0.15)."
+            "description": "X coordinate in meters (right pad: 0.15, left pad: -0.15)."
           },
           "y": {
             "type": "number",
-            "description": "Y coordinate in meters (pads are at -0.18)."
+            "description": "Y coordinate in meters (pads at -0.18)."
           },
           "z": {
             "type": "number",
-            "description": "Z coordinate in meters (pad surface height is 0.015)."
+            "description": "Z coordinate in meters (pad surface: 0.015)."
           }
         },
         "required": ["x", "y", "z"]
@@ -65,13 +65,13 @@
     "type": "function",
     "function": {
       "name": "gripper",
-      "description": "Set the robot arm gripper openness directly. 0.0 is fully open, 1.0 is fully closed.",
+      "description": "Directly set the gripper jaw openness. 0.0 = fully open, 1.0 = fully closed. Use for manual gripper control only — pick and place manage the gripper internally. success=true returns commanded value and actual openness. success=false with INVALID_ARGUMENT if value is outside [0.0, 1.0].",
       "parameters": {
         "type": "object",
         "properties": {
           "value": {
             "type": "number",
-            "description": "Gripper openness ratio from 0.0 (fully open) to 1.0 (fully closed)."
+            "description": "Gripper openness: 0.0 (fully open) to 1.0 (fully closed)."
           }
         },
         "required": ["value"]
@@ -82,7 +82,7 @@
     "type": "function",
     "function": {
       "name": "state",
-      "description": "Query the live simulation telemetry: returns end-effector position, cube position, distance to cube, whether the cube is held, gripper status, and joint angles.",
+      "description": "Query the current robot state. Returns concise semantic state: robot status (ready/holding), gripper status (open/closed), holding flag, end-effector position [x,y,z], and cube position [x,y,z]. Use this to check what the robot is doing before planning actions.",
       "parameters": {
         "type": "object",
         "properties": {},
@@ -94,7 +94,7 @@
     "type": "function",
     "function": {
       "name": "camera",
-      "description": "Capture an image snapshot from the wrist-mounted camera. Returns the filesystem path to the saved PNG image.",
+      "description": "Capture an image from the wrist-mounted camera and save it to disk. Returns the filesystem path to the PNG file. Use when the user asks for a photo or visual inspection. Does not trigger physical movement.",
       "parameters": {
         "type": "object",
         "properties": {},
@@ -106,7 +106,7 @@
     "type": "function",
     "function": {
       "name": "reset_home",
-      "description": "Return the robot arm to its default home resting position.",
+      "description": "Return the arm to its default home resting position. Safe to call at any time. success=true returns the home end-effector position. Does not affect the gripper state.",
       "parameters": {
         "type": "object",
         "properties": {},
@@ -118,14 +118,14 @@
     "type": "function",
     "function": {
       "name": "scenario",
-      "description": "Execute a pre-programmed pick-and-place or inspection scenario by name ('A', 'B', or 'C'). A: Pick and place to right pad (+0.15, -0.18, 0.015) then home. B: Pick and place to left pad (-0.15, -0.18, 0.015) then home. C: Inspection wave with camera photo.",
+      "description": "Execute a pre-programmed pick-and-place or inspection scenario by name. A: pick cube and place on right pad (0.15, -0.18, 0.015) then return home. B: pick cube and place on left pad (-0.15, -0.18, 0.015) then return home. C: move arm up, save camera photo, sweep left and right, return home. Returns semantic state on completion.",
       "parameters": {
         "type": "object",
         "properties": {
           "name": {
             "type": "string",
             "enum": ["A", "B", "C"],
-            "description": "Scenario name: 'A' (place right), 'B' (place left), or 'C' (inspection wave)."
+            "description": "Scenario: 'A' (place right), 'B' (place left), 'C' (inspection wave)."
           }
         },
         "required": ["name"]
@@ -136,7 +136,7 @@
     "type": "function",
     "function": {
       "name": "collisions",
-      "description": "Query currently detected physical contact pairs between robot parts, table, and cube. Useful to check if the arm hit something or is touching an object.",
+      "description": "Query currently detected physical contact pairs between robot parts, table, and cube. Returns in_contact (bool) and a list of contact pairs by geom name. Useful to check whether the arm is touching something unexpected.",
       "parameters": {
         "type": "object",
         "properties": {},
