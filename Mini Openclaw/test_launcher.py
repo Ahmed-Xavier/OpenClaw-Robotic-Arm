@@ -272,6 +272,22 @@ def test_shutdown_idempotent():
     assert True
 
 
+def test_shutdown_handles_second_ctrl_c_while_waiting_for_poller():
+    """A Ctrl+C during polling-thread join must not escape as a traceback."""
+    bus = EventBus()
+    sm = ServiceManager(bus)
+    runner = MagicMock()
+    thread = MagicMock()
+    thread.join.side_effect = KeyboardInterrupt
+    sm._bot_runner = runner
+    sm._bot_thread = thread
+
+    sm.stop_all()
+
+    runner.stop.assert_called_once()
+    thread.join.assert_called_once_with(timeout=20)
+
+
 def test_restart_joins_old_thread():
     """restart_agent must stop the old bot runner and join its thread."""
     bus = EventBus()
@@ -294,6 +310,27 @@ def test_restart_joins_old_thread():
         # Verify old runner stopped and joined
         mock_runner.stop.assert_called_once()
         mock_thread.join.assert_called_once_with(timeout=20)
+
+
+def test_restart_refuses_second_poller_when_old_thread_is_alive(capsys):
+    """A stuck old poller must block replacement rather than duplicate updates."""
+    bus = EventBus()
+    sm = ServiceManager(bus)
+    old_runner = MagicMock()
+    old_thread = MagicMock()
+    old_thread.is_alive.return_value = True
+    sm._bot_runner = old_runner
+    sm._bot_thread = old_thread
+
+    with patch.object(sm, "_create_agent") as create_agent, \
+         patch("launcher.TelegramBotRunner") as runner_cls:
+        sm.restart_agent()
+
+    old_runner.stop.assert_called_once()
+    old_thread.join.assert_called_once_with(timeout=20)
+    create_agent.assert_not_called()
+    runner_cls.assert_not_called()
+    assert "refusing to start a second polling loop" in capsys.readouterr().out
 
 
 def test_restart_does_not_reset_robot():
@@ -380,6 +417,21 @@ def test_format_convo_and_log_event():
 # ===========================================================================
 # 6. Telegram Connectivity & Failure Classification Tests
 # ===========================================================================
+
+def test_startup_still_starts_telegram_when_ollama_start_fails(capsys):
+    """Telegram must not be skipped by an earlier non-Telegram startup failure."""
+    bus = EventBus()
+    sm = ServiceManager(bus)
+
+    with patch.object(sm, "ollama_reachable", return_value=False), \
+         patch.object(sm, "start_ollama_server", return_value=(False, "Ollama unavailable")), \
+         patch.object(sm, "start_bot", return_value=(
+             True, "OK (@testbot)", {"category": "OK", "bot_info": {"username": "testbot"}}
+         )) as start_bot:
+        assert run_startup(sm) is False
+
+    start_bot.assert_called_once()
+    assert "Connecting Telegram" in capsys.readouterr().out
 
 def test_telegram_check_dns_failure():
     """Verify that DNS failure is classified specifically without testing bot token."""
@@ -544,4 +596,3 @@ def test_cmd_telegram_connect_action(capsys):
     assert "Testing connectivity and connecting to Telegram" in out
     assert "Connected as @ConnectedBot" in out
     sm.start_bot.assert_called_once()
-

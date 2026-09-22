@@ -182,6 +182,8 @@ class ServiceManager:
         self._agent: Optional[RobotArmAgent] = None
         self._bot_runner: Optional[TelegramBotRunner] = None
         self._bot_thread: Optional[threading.Thread] = None
+        self._telegram_lock = threading.RLock()
+        self._telegram_starting = False
         self._current_model: str = OLLAMA_MODEL
         self._telegram_diag: Optional[Dict[str, Any]] = None
 
@@ -371,14 +373,21 @@ class ServiceManager:
 
     def start_bot(self) -> Tuple[bool, str, Dict[str, Any]]:
         """Validate connectivity and start the Telegram bot polling thread."""
+        with self._telegram_lock:
+            if self._telegram_starting or (self._bot_thread is not None and self._bot_thread.is_alive()):
+                diag = self._telegram_diag or {"category": "OK", "bot_info": {}}
+                return True, "Telegram polling is already running", diag
+            self._telegram_starting = True
         if self._agent is None:
             self._agent = self._create_agent()
 
         diag = self.check_telegram()
         if diag.get("category") == "NO_TOKEN":
+            self._telegram_starting = False
             return True, "no Telegram token — Telegram disabled", diag
 
         if diag.get("category") != "OK":
+            self._telegram_starting = False
             return False, diag.get("reason", "connectivity check failed"), diag
 
         bot_info = diag.get("bot_info") or {}
@@ -406,8 +415,10 @@ class ServiceManager:
 
         if self._bot_thread.is_alive() and self._bot_runner.running:
             self._bus.emit("system", "launcher", {"msg": f"Telegram connected as @{username}"})
+            self._telegram_starting = False
             return True, f"OK (@{username})", diag
         else:
+            self._telegram_starting = False
             return False, "bot runner failed to stay in polling state", diag
 
     # ------------------------------------------------------------------
@@ -424,6 +435,12 @@ class ServiceManager:
           4. create new TelegramBotRunner
           5. start exactly one new polling thread
         """
+        with self._telegram_lock:
+            if self._telegram_starting:
+                print("  [warning] Telegram lifecycle change already in progress.")
+                return
+            self._telegram_starting = True
+
         # 1. Stop old runner
         if self._bot_runner is not None:
             self._bot_runner.stop()
@@ -433,7 +450,9 @@ class ServiceManager:
             self._bot_thread.join(timeout=20)
             if self._bot_thread.is_alive():
                 print("  [warning] old polling thread did not stop within 20s;"
-                      " it will die naturally as a daemon.")
+                      " refusing to start a second polling loop.")
+                self._telegram_starting = False
+                return
 
         # 3. Apply new model if requested
         if new_model:
@@ -469,6 +488,7 @@ class ServiceManager:
             "msg": f"agent restarted with model={self._current_model}",
             "model": self._current_model,
         })
+        self._telegram_starting = False
 
     # ------------------------------------------------------------------
     # Model change (plan §9 — atomic validation)
@@ -487,13 +507,22 @@ class ServiceManager:
         if self._bot_runner is not None:
             self._bot_runner.stop()
         if self._bot_thread is not None:
-            self._bot_thread.join(timeout=20)
+            try:
+                self._bot_thread.join(timeout=20)
+            except KeyboardInterrupt:
+                # A second Ctrl+C must not turn an already-requested shutdown
+                # into a traceback.  The polling thread is daemonised and has
+                # already received its stop event.
+                logger.warning("Telegram polling join interrupted; continuing shutdown")
 
         if self._flask_proc is not None and self._flask_proc.poll() is None:
             self._flask_proc.terminate()
             try:
                 self._flask_proc.wait(timeout=6)
             except subprocess.TimeoutExpired:
+                self._flask_proc.kill()
+            except KeyboardInterrupt:
+                logger.warning("Flask shutdown wait interrupted; killing subprocess")
                 self._flask_proc.kill()
 
         self._bus.emit("system", "launcher", {"msg": "shutdown complete"})
@@ -1069,6 +1098,36 @@ def _fail(reason: str) -> None:
     print(f"FAIL\n  → {reason}")
 
 
+def _start_telegram_nonfatal(service: ServiceManager) -> Dict[str, Any]:
+    """Start Telegram even when another startup dependency failed."""
+    _step("Connecting Telegram...")
+    ok, msg, diag = service.start_bot()
+    if ok:
+        if "disabled" in msg.lower():
+            print("disabled  (no token)")
+            if service.agent is None:
+                service._agent = service._create_agent()
+        else:
+            username = diag.get("bot_info", {}).get("username", "")
+            _ok(f"@{username}" if username else "")
+    else:
+        print("OFFLINE")
+        print()
+        print("  Reason:")
+        print(f"    {diag.get('reason', msg)}")
+        if diag.get("category") in ("DNS_FAILURE", "TIMEOUT", "TLS_FAILURE", "NETWORK_FAILURE", "CONNECTION_FAILURE"):
+            print("    The bot token was NOT tested because the Telegram API")
+            print("    could not be reached.")
+        elif diag.get("category") == "AUTH_FAILURE":
+            print("    Telegram rejected the bot token.")
+            print("    Please check TELEGRAM_BOT_TOKEN in Mini Openclaw/.env.")
+        print()
+        print("  Terminal still available. Telegram is inactive.")
+        if service.agent is None:
+            service._agent = service._create_agent()
+    return diag
+
+
 def _print_banner() -> None:
     print()
     print("=" * 52)
@@ -1097,6 +1156,7 @@ def run_startup(service: ServiceManager) -> bool:
             _ok()
         else:
             _fail(msg)
+            _start_telegram_nonfatal(service)
             return False
 
     # ---- Ollama: model existence ----
@@ -1106,6 +1166,7 @@ def run_startup(service: ServiceManager) -> bool:
         _ok()
     else:
         _fail(msg)
+        _start_telegram_nonfatal(service)
         return False
 
     # ---- Ollama: inference validation ----
@@ -1117,6 +1178,7 @@ def run_startup(service: ServiceManager) -> bool:
         _ok(f"{elapsed:.1f}s")
     else:
         _fail(reason)
+        _start_telegram_nonfatal(service)
         return False
 
     # ---- Flask / MuJoCo ----
@@ -1129,6 +1191,7 @@ def run_startup(service: ServiceManager) -> bool:
     else:
         _fail(msg)
         print("  Check logs/server.log for details.")
+        _start_telegram_nonfatal(service)
         return False
 
     # ---- Telegram bot (non-fatal) ----
