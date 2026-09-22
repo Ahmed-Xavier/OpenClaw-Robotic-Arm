@@ -433,8 +433,9 @@ class RobotAPI:
         target_ctrl[5] = jaw_target
         self._step_to_ctrl(target_ctrl, steps=steps)
 
-        # Update holding state based on gripper command
-        self._holding = val > 0.5
+        # NOTE: gripper openness does NOT determine holding state.
+        # self._holding is authoritative and is only set by pick() (verified
+        # via position heuristic) and cleared by pick() failure / place().
 
         jaw_pos = float(self.data.qpos[5])
         openness = float(np.clip((jaw_pos - JAW_CLOSED) / (JAW_OPEN - JAW_CLOSED), 0.0, 1.0))
@@ -566,6 +567,8 @@ class RobotAPI:
                 error_message="Cube did not move with the gripper during the lift.",
             )
 
+        # Grasp verified — authoritative holding state set here, NOT in gripper()
+        self._holding = True
         return self._make_result("pick", result={
             "holding": True,
             "object": "cube",
@@ -598,6 +601,7 @@ class RobotAPI:
         self.move_to(x, y, z + hover_height, steps=steps)
         self.move_to(x, y, z, steps=steps)
         self.gripper(0.0, steps=50)   # Open gripper — release
+        self._holding = False          # Authoritative: cube released
         self.move_to(x, y, z + hover_height, steps=steps)
 
         # Measure actual cube position after release
