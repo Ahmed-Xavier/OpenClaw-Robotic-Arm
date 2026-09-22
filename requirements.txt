@@ -1,1 +1,5 @@
-flask
+Flask>=3.0,<4
+requests>=2.31,<3
+mujoco>=3.2,<4
+numpy>=1.24,<3
+Pillow>=10,<12
