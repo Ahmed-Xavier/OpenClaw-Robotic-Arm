@@ -18,6 +18,8 @@ import argparse
 import logging
 import os
 import queue
+import socket
+import ssl
 import sys
 import threading
 import time
@@ -42,6 +44,222 @@ BUTTON_STEP_XY = 0.03   # lateral / forward step per button press
 BUTTON_STEP_Z = 0.03    # vertical step per button press
 
 
+# ---------------------------------------------------------------------------
+# Telegram Diagnostic & Connectivity Classification
+# ---------------------------------------------------------------------------
+
+def check_telegram_connectivity(token: str, timeout: float = 5.0) -> Dict[str, Any]:
+    """Perform a layered diagnostic check of the Telegram connection path.
+
+    Evaluates:
+      - Token presence
+      - DNS resolution of api.telegram.org
+      - TCP connection to api.telegram.org:443
+      - TLS/SSL handshake
+      - Telegram Bot API getMe authentication
+
+    Returns a structured dictionary without ever exposing the bot token.
+    """
+    if not token or not token.strip():
+        return {
+            "network": "OK",
+            "dns": "NOT TESTED",
+            "https": "NOT TESTED",
+            "bot_api": "NOT TESTED",
+            "auth": "NOT TESTED",
+            "category": "NO_TOKEN",
+            "bot_info": None,
+            "reason": "No Telegram bot token configured.",
+            "detail": "Set TELEGRAM_BOT_TOKEN in Mini Openclaw/.env to enable Telegram.",
+        }
+
+    host = "api.telegram.org"
+    port = 443
+
+    # 1. DNS resolution
+    try:
+        addrinfo = socket.getaddrinfo(host, port)
+        if not addrinfo:
+            raise socket.gaierror("No address returned")
+    except socket.gaierror as e:
+        return {
+            "network": "OK",
+            "dns": "FAILED",
+            "https": "NOT TESTED",
+            "bot_api": "NOT TESTED",
+            "auth": "NOT TESTED",
+            "category": "DNS_FAILURE",
+            "bot_info": None,
+            "reason": f"DNS resolution failed for {host}.",
+            "detail": f"{host} could not be resolved. The bot token was NOT tested because the Telegram API could not be reached.",
+        }
+    except Exception as e:
+        return {
+            "network": "FAILED",
+            "dns": "FAILED",
+            "https": "NOT TESTED",
+            "bot_api": "NOT TESTED",
+            "auth": "NOT TESTED",
+            "category": "NETWORK_FAILURE",
+            "bot_info": None,
+            "reason": f"Network resolution error for {host}: {e}",
+            "detail": "The bot token was NOT tested because the Telegram API could not be reached.",
+        }
+
+    # 2. TCP connection
+    try:
+        s = socket.create_connection((host, port), timeout=timeout)
+    except socket.timeout:
+        return {
+            "network": "OK",
+            "dns": "OK",
+            "https": "FAILED (TIMEOUT)",
+            "bot_api": "NOT TESTED",
+            "auth": "NOT TESTED",
+            "category": "TIMEOUT",
+            "bot_info": None,
+            "reason": f"Connection to {host} timed out.",
+            "detail": f"The bot token was NOT tested because TCP connection to port {port} timed out.",
+        }
+    except Exception as e:
+        return {
+            "network": "OK",
+            "dns": "OK",
+            "https": "FAILED",
+            "bot_api": "NOT TESTED",
+            "auth": "NOT TESTED",
+            "category": "CONNECTION_FAILURE",
+            "bot_info": None,
+            "reason": f"Failed to connect to {host}:{port}: {e}",
+            "detail": "The bot token was NOT tested because TCP connection failed.",
+        }
+
+    # 3. TLS / SSL handshake
+    try:
+        ctx = ssl.create_default_context()
+        with ctx.wrap_socket(s, server_hostname=host) as ss:
+            pass
+    except ssl.SSLError as e:
+        return {
+            "network": "OK",
+            "dns": "OK",
+            "https": "FAILED (TLS)",
+            "bot_api": "NOT TESTED",
+            "auth": "NOT TESTED",
+            "category": "TLS_FAILURE",
+            "bot_info": None,
+            "reason": "TLS/SSL connection failed.",
+            "detail": f"TLS handshake with {host} failed: {e}. The bot token was NOT tested.",
+        }
+    except Exception as e:
+        return {
+            "network": "OK",
+            "dns": "OK",
+            "https": "FAILED",
+            "bot_api": "NOT TESTED",
+            "auth": "NOT TESTED",
+            "category": "TLS_FAILURE",
+            "bot_info": None,
+            "reason": f"SSL connection error: {e}",
+            "detail": "The bot token was NOT tested.",
+        }
+
+    # 4. Telegram API getMe
+    session = requests.Session()
+    try:
+        r = session.get(f"https://{host}/bot{token}/getMe", timeout=timeout)
+    except requests.exceptions.Timeout:
+        return {
+            "network": "OK",
+            "dns": "OK",
+            "https": "OK",
+            "bot_api": "FAILED (TIMEOUT)",
+            "auth": "NOT TESTED",
+            "category": "TIMEOUT",
+            "bot_info": None,
+            "reason": f"Connection to {host} timed out during API call.",
+            "detail": "The bot token was NOT tested because the request timed out.",
+        }
+    except requests.exceptions.RequestException as e:
+        return {
+            "network": "OK",
+            "dns": "OK",
+            "https": "FAILED",
+            "bot_api": "FAILED",
+            "auth": "NOT TESTED",
+            "category": "HTTP_FAILURE",
+            "bot_info": None,
+            "reason": f"HTTP request to {host} failed: {e}",
+            "detail": "The bot token was NOT tested.",
+        }
+
+    # 5. Authentication result
+    if r.status_code == 200:
+        try:
+            data = r.json()
+            if data.get("ok"):
+                bot_info = data.get("result", {})
+                return {
+                    "network": "OK",
+                    "dns": "OK",
+                    "https": "OK",
+                    "bot_api": "OK",
+                    "auth": "OK",
+                    "category": "OK",
+                    "bot_info": bot_info,
+                    "reason": "Authenticated successfully.",
+                    "detail": f"Connected as @{bot_info.get('username')}.",
+                }
+            else:
+                return {
+                    "network": "OK",
+                    "dns": "OK",
+                    "https": "OK",
+                    "bot_api": "OK",
+                    "auth": "FAILED",
+                    "category": "AUTH_FAILURE",
+                    "bot_info": None,
+                    "reason": "Telegram rejected the bot token.",
+                    "detail": data.get("description", "Unauthorized"),
+                }
+        except Exception as e:
+            return {
+                "network": "OK",
+                "dns": "OK",
+                "https": "OK",
+                "bot_api": "FAILED",
+                "auth": "FAILED",
+                "category": "PARSE_ERROR",
+                "bot_info": None,
+                "reason": "Invalid JSON response from Telegram API.",
+                "detail": str(e),
+            }
+    elif r.status_code in (401, 404):
+        return {
+            "network": "OK",
+            "dns": "OK",
+            "https": "OK",
+            "bot_api": "OK",
+            "auth": "FAILED",
+            "category": "AUTH_FAILURE",
+            "bot_info": None,
+            "reason": "Telegram rejected the bot token.",
+            "detail": f"HTTP {r.status_code}: Unauthorized or bot not found.",
+        }
+    else:
+        return {
+            "network": "OK",
+            "dns": "OK",
+            "https": "OK",
+            "bot_api": f"FAILED (HTTP {r.status_code})",
+            "auth": "FAILED",
+            "category": "HTTP_ERROR",
+            "bot_info": None,
+            "reason": f"Telegram returned HTTP status {r.status_code}",
+            "detail": r.text[:100],
+        }
+
+
 class TelegramClient:
     """Minimal, self-contained Telegram Bot API HTTP client."""
 
@@ -49,17 +267,26 @@ class TelegramClient:
         self.token = token
         self.base_url = f"https://api.telegram.org/bot{token}"
         self.session = requests.Session()
+        self.last_diag: Optional[Dict[str, Any]] = None
+
+    def check_connectivity(self) -> Dict[str, Any]:
+        """Perform a full layered connectivity check."""
+        self.last_diag = check_telegram_connectivity(self.token)
+        return self.last_diag
 
     def get_me(self) -> Optional[Dict[str, Any]]:
         """Verify token and get bot metadata."""
-        try:
-            r = self.session.get(f"{self.base_url}/getMe", timeout=10)
-            data = r.json()
-            if data.get("ok"):
-                return data.get("result")
-        except Exception as e:
-            logger.error("Failed to connect to Telegram getMe: %s", e)
-        return None
+        diag = self.check_connectivity()
+        if diag.get("category") == "OK":
+            return diag.get("bot_info")
+        else:
+            logger.warning(
+                "Telegram getMe check failed [%s]: %s (%s)",
+                diag.get("category"),
+                diag.get("reason"),
+                diag.get("detail", ""),
+            )
+            return None
 
     def get_updates(self, offset: Optional[int] = None, timeout: int = 30) -> list:
         """Fetch pending Telegram updates using long-polling."""
@@ -304,9 +531,10 @@ def _handle_button(callback_data: str, flask_session: requests.Session) -> str:
 class TelegramBotRunner:
     """Manages Telegram polling and per-chat serial work queues."""
 
-    def __init__(self, token: str, agent: RobotArmAgent):
+    def __init__(self, token: str, agent: RobotArmAgent, event_bus: Optional[Any] = None):
         self.client = TelegramClient(token)
         self.agent = agent
+        self.event_bus = event_bus
         self.running = False
 
         # Shared HTTP session for button Flask calls
@@ -361,6 +589,33 @@ class TelegramBotRunner:
         }
 
         def callback(event: str, tool_name: str, data: Any):
+            if self.event_bus:
+                if event == "started":
+                    self.event_bus.emit("tool_call", "agent", {
+                        "name": tool_name,
+                        "arguments": data if isinstance(data, dict) else {},
+                        "chat_id": chat_id,
+                    })
+                elif event == "completed":
+                    self.event_bus.emit("tool_result", "agent", {
+                        "name": tool_name,
+                        "success": True,
+                        "detail": "",
+                        "chat_id": chat_id,
+                    })
+                elif event == "failed":
+                    err_info = ""
+                    if isinstance(data, dict):
+                        err = data.get("error") or {}
+                        if isinstance(err, dict):
+                            err_info = err.get("message", "")
+                    self.event_bus.emit("tool_result", "agent", {
+                        "name": tool_name,
+                        "success": False,
+                        "detail": err_info,
+                        "chat_id": chat_id,
+                    })
+
             if event == "started":
                 label = action_labels.get(tool_name, f"Executing {tool_name}...")
                 if status_msg_ref[0] is None:
@@ -438,6 +693,16 @@ class TelegramBotRunner:
                 user_text = task.get("text", "")
                 logger.info("Processing message for chat %s: '%s'", chat_id, user_text)
 
+                if self.event_bus:
+                    self.event_bus.emit("telegram_in", "telegram", {
+                        "text": user_text,
+                        "chat_id": chat_id,
+                    })
+                    self.event_bus.emit("agent_start", "telegram", {
+                        "text": user_text,
+                        "chat_id": chat_id,
+                    })
+
                 # Phase 17 — /controls command
                 if user_text.strip().lower() == "/controls":
                     self.client.send_message(
@@ -445,6 +710,8 @@ class TelegramBotRunner:
                         "🤖 Manual Robot Controls\nButtons call the robot directly — no AI involved.",
                         reply_markup=_controls_keyboard(),
                     )
+                    if self.event_bus:
+                        self.event_bus.emit("agent_end", "telegram", {"chat_id": chat_id})
                     q.task_done()
                     continue
 
@@ -462,6 +729,13 @@ class TelegramBotRunner:
 
                     reply_text = result.get("reply", "Done.")
                     photos = result.get("photos", [])
+
+                    if self.event_bus:
+                        self.event_bus.emit("telegram_out", "agent", {
+                            "reply": reply_text,
+                            "photos": photos,
+                            "chat_id": chat_id,
+                        })
 
                     # Clean up status message if it exists (final reply replaces it)
                     if status_msg_ref[0] is not None:
@@ -482,19 +756,31 @@ class TelegramBotRunner:
 
                 except Exception as e:
                     logger.error("Unhandled error processing chat message: %s", e, exc_info=True)
+                    if self.event_bus:
+                        self.event_bus.emit("error", "telegram", {
+                            "msg": str(e),
+                            "chat_id": chat_id,
+                        })
                     self.client.send_message(
                         chat_id,
                         f"An error occurred while handling your request: {e}",
                     )
                 finally:
+                    if self.event_bus:
+                        self.event_bus.emit("agent_end", "telegram", {
+                            "chat_id": chat_id,
+                        })
                     q.task_done()
 
     def start(self):
         """Start long-polling loop."""
         bot_info = self.client.get_me()
         if not bot_info:
-            logger.error("Invalid bot token or Telegram unreachable. Exiting.")
-            sys.exit(1)
+            diag = getattr(self.client, "last_diag", None) or {}
+            reason = diag.get("reason", "authentication failed")
+            logger.warning("Telegram polling stopped: %s", reason)
+            self.running = False
+            return
 
         username = bot_info.get("username", "RobotArmBot")
         logger.info("Bot authenticated as @%s. Starting long-polling...", username)
@@ -504,7 +790,7 @@ class TelegramBotRunner:
 
         try:
             while self.running:
-                updates = self.client.get_updates(offset=offset, timeout=20)
+                updates = self.client.get_updates(offset=offset, timeout=10)
                 for update in updates:
                     offset = update["update_id"] + 1
 
