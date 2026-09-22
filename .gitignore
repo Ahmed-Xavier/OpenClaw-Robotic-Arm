@@ -181,3 +181,5 @@ mjmodel.xml
 !.env.example
 *.env
 *.jsonl
+
+logs/
