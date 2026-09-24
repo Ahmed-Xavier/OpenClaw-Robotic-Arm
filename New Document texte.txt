@@ -1,0 +1,558 @@
+OPENCLAW ROBOTIC ARM — LAYA INTEGRATION CHECKPOINT
+Date: September 23, 2026
+
+==================================================
+
+1. WHAT WE HAVE ACCOMPLISHED
+   ==================================================
+
+## PROJECT
+
+Repository:
+Ahmed-Xavier/OpenClaw-Robotic-Arm
+
+Goal:
+A lightweight "Mini OpenClaw" controlling a simulated SO-100 robotic arm through:
+
+* MuJoCo
+* Flask REST API
+* Local Ollama/Qwen
+* Optional Telegram interface
+
+The important safety architecture is already in place:
+Qwen does NOT directly control the robot.
+All physical/simulated robot actions go through validation + RobotAPI.
+
+## CURRENT ARCHITECTURE
+
+USER
+↓
+Mini OpenClaw / Agent
+↓
+Qwen
+↓
+validated tool call
+↓
+Flask API
+↓
+RobotAPI
+↓
+MuJoCo SO-100
+
+We decided to add Laya as a fast System-1 routing layer.
+
+## TARGET ARCHITECTURE
+
+```
+                     ┌── simple ──→ validation → RobotAPI
+                     │
+```
+
+USER → LAYA ─────────────┤
+│
+└── complex → Qwen
+↓
+simple actions
+↓
+Laya
+↓
+validation → RobotAPI
+
+The important point:
+Laya is NOT replacing Qwen.
+
+Laya decides whether the user's request is a simple robot action or a
+complex task that needs Qwen's planning/reasoning.
+
+Qwen then decomposes complex tasks into simple actions.
+
+Those actions should still pass through Laya and the existing validation
+layer before reaching the robot.
+
+==================================================
+2. LAYA INVESTIGATION
+=====================
+
+We initially investigated the Laya project and found the public repository:
+
+NandhaKishorM/laya
+
+Laya describes itself as a multilingual, non-autoregressive System-1
+decision engine.
+
+It supports typed decisions such as:
+
+* choice
+* score
+* noul
+
+Available checkpoints include:
+
+* laya
+* laya-multilingual
+* laya-typed-decisions
+
+We cloned the repository and installed it locally.
+
+Python environment:
+Python 3.11.9
+
+We initially had CPU-only PyTorch.
+
+Detected hardware:
+NVIDIA RTX 4050 Laptop GPU
+
+We replaced CPU PyTorch with CUDA PyTorch:
+
+torch 2.11.0+cu128
+torchvision 0.26.0+cu128
+
+CUDA is working.
+
+The RTX 4050 is therefore being used for Laya inference.
+
+==================================================
+3. IMPORTANT LAYA DISCOVERY
+===========================
+
+We tested Laya's Router.
+
+The Router added roughly 1.27 seconds of latency for a simple
+"pick up the cube" request.
+
+That is too much overhead for our intended fast System-1 layer.
+
+Therefore:
+
+DO NOT use Router.predict() for every robot command.
+
+For our current English-only robot interface, use the direct Laya
+checkpoint and keep it loaded in memory.
+
+Direct Laya inference was measured around:
+
+~140–240 ms
+
+depending on the run.
+
+The most recent end-to-end test measured:
+
+240.25 ms
+
+==================================================
+4. CUSTOM ROBOT ROUTING QUESTION
+================================
+
+The generic Laya robot-unaware presets were not good enough.
+
+Examples showed that generic classification could interpret things like
+"pick up cube" or "move arm to cube" incorrectly.
+
+Therefore we created a custom robotics question:
+
+robot_action
+
+with three choices:
+
+simple_action
+complex_task
+non_robot
+
+Definitions:
+
+simple_action:
+A single direct robot action that can be executed immediately.
+
+complex_task:
+A robot task requiring multiple actions or planning.
+
+non_robot:
+The request is not asking the robot to perform an action.
+
+This custom question performed substantially better for basic robot
+commands, although it is NOT perfect.
+
+In particular, Laya sometimes confuses:
+simple_action vs complex_task
+
+and sometimes has difficulty with casual/non-robot requests.
+
+Therefore Laya should NOT be treated as an absolute safety authority.
+
+Existing validation + RobotAPI remain authoritative.
+
+==================================================
+5. LAYA CALIBRATION WARNING
+===========================
+
+Every load produces this warning:
+
+"this checkpoint ships temperatures outside [0.5, 5] which would
+distort confidence..."
+
+Therefore:
+
+DO NOT interpret Laya's probabilities as calibrated real-world
+confidence percentages.
+
+For example:
+
+simple_action: 0.8259
+
+does NOT necessarily mean:
+
+"82.59% probability that this classification is correct."
+
+The probabilities are still useful for comparing the model's output,
+but they should not be treated as calibrated certainty.
+
+==================================================
+6. END-TO-END TEST COMPLETED
+============================
+
+We created:
+
+laya_pick_test.py
+
+The test:
+
+1. Loads Laya
+2. Performs a warmup
+3. Sends:
+   "pick up the cube"
+4. Measures Laya inference
+5. If Laya returns simple_action:
+   sends /pick to the existing Flask server
+6. Measures robot execution
+7. Measures total time
+
+## LATEST RESULT
+
+Command:
+"pick up the cube"
+
+Laya:
+
+Decision:
+simple_action
+
+Probabilities:
+simple_action = 0.8259
+complex_task = 0.0478
+non_robot    = 0.1263
+
+Laya inference:
+240.25 ms
+
+Robot:
+
+HTTP status:
+200
+
+Result:
+success = true
+
+Cube:
+holding = true
+
+Grasp verification:
+verified = true
+
+Robot execution:
+1593.87 ms
+
+TOTAL:
+
+1835.56 ms
+
+≈ 1.836 seconds
+
+Therefore the complete real measured pipeline is:
+
+USER COMMAND
+↓
+Laya:       0.240 s
+↓
+Flask + RobotAPI:
+1.594 s
+↓
+TOTAL:      1.836 s
+
+==================================================
+7. WHAT THIS TELLS US
+=====================
+
+Laya is NOT the main bottleneck.
+
+For the tested pick action:
+
+Laya:
+~240 ms
+
+Robot:
+~1594 ms
+
+Laya accounts for roughly 13% of the measured total time.
+
+The actual robot action dominates the latency.
+
+The earlier Router test was much slower because Router model selection
+added significant overhead.
+
+Therefore the intended implementation should keep the direct Laya
+model resident in memory.
+
+==================================================
+8. TOMORROW'S NEXT TESTS
+========================
+
+DO NOT INTEGRATE YET.
+
+First test whether Laya can correctly distinguish three important
+categories.
+
+## TEST 1
+
+"open the gripper"
+
+Expected:
+simple_action
+
+## TEST 2
+
+"pick up the cube, move it to the right pad, and release it"
+
+Expected:
+complex_task
+
+This is the most important test.
+
+We want to see whether Laya can recognize that the request requires
+multiple actions.
+
+If classified as complex_task:
+
+USER
+↓
+LAYA
+↓
+complex_task
+↓
+QWEN
+↓
+decompose task
+↓
+simple actions
+↓
+LAYA
+↓
+validation
+↓
+ROBOT
+
+## TEST 3
+
+"what is the capital of France?"
+
+Expected:
+non_robot
+
+These tests should be performed BEFORE modifying the main project.
+
+==================================================
+9. AFTER THAT — INTEGRATION PLAN
+================================
+
+If the routing tests are acceptable, integrate Laya into Mini OpenClaw.
+
+## STEP 1
+
+Load the direct Laya model once when the agent starts.
+
+Do NOT reload Laya for every message.
+
+## STEP 2
+
+Create a small Laya routing function.
+
+Conceptually:
+
+route(request) → simple_action / complex_task / non_robot
+
+## STEP 3
+
+For simple robot requests:
+
+USER
+↓
+LAYA
+↓
+simple_action
+↓
+existing tool/validation pipeline
+↓
+RobotAPI
+
+We should NOT bypass the existing validation layer.
+
+## STEP 4
+
+For complex robot requests:
+
+USER
+↓
+LAYA
+↓
+complex_task
+↓
+Qwen
+
+Qwen decomposes the request into simple actions.
+
+## STEP 5
+
+Each Qwen-generated action goes back through the controlled action
+pipeline.
+
+Conceptually:
+
+Qwen:
+"pick up cube"
+
+```
+  ↓
+```
+
+Laya:
+simple_action
+
+```
+  ↓
+```
+
+existing validation
+
+```
+  ↓
+```
+
+RobotAPI
+
+Then:
+
+Qwen:
+"place cube on right pad"
+
+```
+  ↓
+```
+
+Laya:
+simple_action
+
+```
+  ↓
+```
+
+existing validation
+
+```
+  ↓
+```
+
+RobotAPI
+
+## STEP 6
+
+Keep Qwen's existing:
+
+* tool schemas
+* round limits
+* history
+* validation
+* Flask execution
+* status callbacks
+* logging
+
+Laya should be an additional routing layer, not a replacement for
+the existing safety architecture.
+
+==================================================
+10. CURRENT PROJECT STATUS
+==========================
+
+WORKING:
+
+[✓] SO-100 MuJoCo robot
+[✓] RobotAPI
+[✓] Flask REST API
+[✓] Robot state
+[✓] pick
+[✓] place
+[✓] gripper
+[✓] move_to
+[✓] reset_home
+[✓] validation
+[✓] Qwen agent
+[✓] bounded tool execution
+[✓] Telegram bot
+[✓] status/typing indicators
+[✓] direct control buttons
+[✓] Laya installed
+[✓] CUDA acceleration
+[✓] custom robot routing question
+[✓] direct Laya benchmark
+[✓] Laya → Flask → Robot end-to-end test
+[✓] Successful real pick through Laya test
+
+NOT DONE:
+
+[ ] Test complex-task classification
+[ ] Test non-robot classification
+[ ] Measure open-gripper routing
+[ ] Measure complex request routing
+[ ] Integrate Laya into Mini OpenClaw
+[ ] Connect Laya → Qwen
+[ ] Connect Qwen → Laya
+[ ] Test full complex-task execution
+[ ] Tune routing thresholds/behavior
+[ ] Test failure/recovery cases
+[ ] Update Telegram behavior
+[ ] Final latency benchmark
+
+==================================================
+11. IMPORTANT DESIGN PRINCIPLE
+==============================
+
+The goal is NOT:
+
+"Laya replaces Qwen."
+
+The goal is:
+
+"Laya handles fast System-1 decisions and routes complex work to Qwen."
+
+The final architecture should preserve:
+
+Laya = fast routing / decision layer
+
+Qwen = complex reasoning / task decomposition
+
+Validation = safety and schema enforcement
+
+RobotAPI = final robot authority
+
+MuJoCo = physical simulation
+
+==================================================
+12. TOMORROW'S FIRST COMMAND
+============================
+
+Start by running the three classification tests.
+
+Do not modify the main repository yet.
+
+First collect the actual Laya outputs and timings.
+
+Then decide how the router should behave based on measurements rather
+than assumptions.
