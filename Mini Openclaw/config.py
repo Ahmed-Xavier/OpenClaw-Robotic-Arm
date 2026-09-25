@@ -61,19 +61,20 @@ KNOWN_POSITIONS = {
 }
 
 # ---------------------------------------------------------------------------
-# Agent loop limits (Phase 8)
+# Agent loop limits
 # ---------------------------------------------------------------------------
-# MAX_AGENT_ROUNDS: maximum Ollama reasoning invocations per user request.
-# The model can observe tool results and plan further within this budget.
-MAX_AGENT_ROUNDS = int(os.getenv("MAX_AGENT_ROUNDS", "6"))
+# MAX_AGENT_ROUNDS: emergency safety ceiling for Ollama reasoning invocations
+# per user request. Allows deep observe-act-verify-correct loops without
+# prematurely stopping physical tasks, while guarding against infinite loops.
+MAX_AGENT_ROUNDS = int(os.getenv("MAX_AGENT_ROUNDS", "25"))
 
-# MAX_TOOL_CALLS_PER_TURN: maximum physical tool calls per user request.
-# Prevents runaway tool-call chains regardless of how many reasoning rounds
-# the model uses.  High-level skills (pick, place) count as 1 each.
-MAX_TOOL_CALLS_PER_TURN = int(os.getenv("MAX_TOOL_CALLS_PER_TURN", "4"))
+# MAX_TOOL_CALLS_PER_TURN / MAX_PHYSICAL_ACTIONS: emergency safety ceiling for
+# physical motor actions (move_to, pick, place, gripper, reset_home, scenario).
+# Read-only observation calls (state, camera, collisions) do NOT count against this.
+MAX_TOOL_CALLS_PER_TURN = int(os.getenv("MAX_TOOL_CALLS_PER_TURN", "15"))
+MAX_PHYSICAL_ACTIONS = MAX_TOOL_CALLS_PER_TURN
 
 # Kept for backward compatibility with any code that may reference the old name.
-# New code should use MAX_AGENT_ROUNDS and MAX_TOOL_CALLS_PER_TURN.
 MAX_TOOL_STEPS = MAX_AGENT_ROUNDS
 
 # ---------------------------------------------------------------------------

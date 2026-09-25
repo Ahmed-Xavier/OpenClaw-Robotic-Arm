@@ -28,14 +28,13 @@
     "type": "function",
     "function": {
       "name": "pick",
-      "description": "Pick up an object (the red cube or the blue sphere) using the built-in deterministic horizontal side-approach grasp routine. Handles open gripper, approach, slide-in, settle, close, and lift internally. Do NOT manually reproduce these steps with move_to and gripper calls. Preconditions: target object must exist, robot must not already be holding it. success=true means the position heuristic confirmed the object lifted with the arm. success=false with error.code=INVALID_STATE means already holding. success=false with error.code=EXECUTION_FAILED means the object did not lift.",
+      "description": "Pick up an object (e.g. red cube or blue sphere) using the built-in deterministic horizontal side-approach grasp routine. Handles open gripper, approach, slide-in, settle, close, and lift internally. Do NOT manually reproduce these steps with move_to and gripper calls. Preconditions: target object must exist in simulation (returns OBJECT_NOT_FOUND if missing), robot must not already be holding an object (returns INVALID_STATE if already holding). success=true means the position heuristic confirmed the object lifted with the arm. success=false with EXECUTION_FAILED means the object did not lift.",
       "parameters": {
         "type": "object",
         "properties": {
           "target": {
             "type": "string",
-            "enum": ["cube", "sphere"],
-            "description": "Target object to pick up: 'cube' (default: red cube) or 'sphere' (blue sphere)."
+            "description": "Target object to pick up, e.g. 'cube' (red cube) or 'sphere' (blue sphere)."
           }
         },
         "required": []
@@ -46,7 +45,7 @@
     "type": "function",
     "function": {
       "name": "place",
-      "description": "Place the currently held cube at an absolute [x, y, z] target position and release the gripper. Precondition: robot must be holding the cube (success=false with NOT_HOLDING if not). The tool moves to the target, releases, and returns the actual cube position and target_error (m). success=true means the cube was released near the target. Known locations: right pad (0.15, -0.18, 0.015), left pad (-0.15, -0.18, 0.015).",
+      "description": "Place the currently held object (cube or sphere) at an absolute [x, y, z] target position and release the gripper. Precondition: robot must be holding an object (returns NOT_HOLDING if not). Releases the object at target. Call 'state' afterwards to verify whether the object stayed at the destination or rolled away. Known locations: right pad (0.15, -0.18, 0.015), left pad (-0.15, -0.18, 0.015).",
       "parameters": {
         "type": "object",
         "properties": {
@@ -71,7 +70,7 @@
     "type": "function",
     "function": {
       "name": "gripper",
-      "description": "Directly set the gripper jaw openness. 0.0 = fully open, 1.0 = fully closed. Use for manual gripper control only — pick and place manage the gripper internally. success=true returns commanded value and actual openness. success=false with INVALID_ARGUMENT if value is outside [0.0, 1.0].",
+      "description": "Directly set the gripper jaw openness. 0.0 = fully open, 1.0 = fully closed. Use for manual gripper control only — pick and place manage the gripper internally. success=true returns commanded value, actual openness, and is_closed (jaw state). success=false with INVALID_ARGUMENT if value is outside [0.0, 1.0].",
       "parameters": {
         "type": "object",
         "properties": {
@@ -88,7 +87,7 @@
     "type": "function",
     "function": {
       "name": "state",
-      "description": "Query the current robot state. Returns concise semantic state: robot status (ready/holding), gripper status (open/closed), holding flag, end-effector position [x,y,z], and cube position [x,y,z]. Use this to check what the robot is doing before planning actions.",
+      "description": "Query the live robot and world state. Returns concise semantic state: robot status (ready/holding), gripper status (open/closed), holding flag, held_object, end-effector position [x,y,z], and exact coordinates and workspace relations of cube and sphere. Authoritative source of physical truth. Use this before planning and after physical actions to verify outcomes.",
       "parameters": {
         "type": "object",
         "properties": {},

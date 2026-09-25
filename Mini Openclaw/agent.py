@@ -60,6 +60,10 @@ FAILURE_TOOL_FAILED = "TOOL_FAILED"              # physical action returned succ
 FAILURE_EXECUTION_INCOMPLETE = "EXECUTION_INCOMPLETE"  # limits reached before finishing
 FAILURE_FINAL_RESPONSE_FAILED = "FINAL_RESPONSE_FAILED"  # action OK, LLM reply timed out
 
+# Tool classification: observation probes vs motor actions
+OBSERVATION_TOOLS = {"state", "camera", "collisions"}
+PHYSICAL_ACTION_TOOLS = {"move_to", "pick", "place", "gripper", "reset_home", "scenario"}
+
 
 def load_soul(soul_path: Path = SOUL_FILE_PATH) -> str:
     """Load the robot arm personality and system prompt from a separate file."""
@@ -201,13 +205,16 @@ class RobotArmAgent:
                 return False, f"Scenario '{name}' is unknown. Must be one of {sorted(list(VALID_SCENARIOS))}."
             arguments["name"] = name
 
-        # Pick tool: optional target parameter ("cube" or "sphere", defaults to "cube")
+        # Pick tool: optional target parameter ("cube" or "sphere", or natural synonyms)
         elif tool_name == "pick":
             if "target" in arguments and arguments["target"] is not None:
-                target = str(arguments["target"]).strip().lower()
-                if target not in ("cube", "sphere"):
-                    return False, f"Invalid pick target '{target}'. Must be 'cube' or 'sphere'."
-                arguments["target"] = target
+                raw_target = str(arguments["target"]).strip().lower()
+                clean_target = "_".join(raw_target.replace("-", " ").split())
+                valid_cube = {"cube", "red_cube", "red_box", "box"}
+                valid_sphere = {"sphere", "blue_sphere", "ball", "blue_ball"}
+                if clean_target not in valid_cube and clean_target not in valid_sphere:
+                    return False, f"Invalid pick target '{arguments.get('target')}'. Must be 'cube' or 'sphere'."
+                arguments["target"] = "sphere" if clean_target in valid_sphere else "cube"
 
         # state, camera, reset_home, collisions take no required params
         return True, None
@@ -396,6 +403,7 @@ class RobotArmAgent:
         failure_type = None
         agent_rounds = 0
         physical_tool_calls_count = 0
+        observation_calls_count = 0
 
         # ---------------------------------------------------------------
         # Phase 8 — bounded loop with two distinct limits:
@@ -450,10 +458,12 @@ class RobotArmAgent:
                     arguments = func.get("arguments", {})
                     call_id = tc.get("id", f"call_{int(time.time()*1000)}")
 
-                    # Phase 8 — enforce physical tool call limit
-                    if physical_tool_calls_count >= MAX_TOOL_CALLS_PER_TURN:
+                    is_physical_action = tool_name in PHYSICAL_ACTION_TOOLS
+
+                    # Enforce physical action limit only on physical motor actions
+                    if is_physical_action and physical_tool_calls_count >= MAX_TOOL_CALLS_PER_TURN:
                         logger.warning(
-                            "Physical tool call limit (%d) reached. Stopping tool execution.",
+                            "Physical action limit (%d) reached. Stopping physical action execution.",
                             MAX_TOOL_CALLS_PER_TURN,
                         )
                         # Feed limit notice back to model so it knows
@@ -464,8 +474,8 @@ class RobotArmAgent:
                             "error": {
                                 "code": "EXECUTION_INCOMPLETE",
                                 "message": (
-                                    f"Physical tool call limit ({MAX_TOOL_CALLS_PER_TURN}) "
-                                    "reached. No further robot actions will be executed."
+                                    f"Physical action limit ({MAX_TOOL_CALLS_PER_TURN}) "
+                                    "reached. No further robot physical actions will be executed."
                                 ),
                             },
                         }
@@ -545,7 +555,11 @@ class RobotArmAgent:
                             except Exception:
                                 pass
 
-                        physical_tool_calls_count += 1
+                        if is_physical_action:
+                            physical_tool_calls_count += 1
+                        else:
+                            observation_calls_count += 1
+
                         tool_calls_executed.append({
                             "name": tool_name,
                             "arguments": arguments,
@@ -615,6 +629,7 @@ class RobotArmAgent:
             "user_message": user_text,
             "agent_rounds": agent_rounds,
             "physical_tool_calls_count": physical_tool_calls_count,
+            "observation_calls_count": observation_calls_count,
             "tool_calls": [
                 {
                     "name": tc["name"],
@@ -656,4 +671,6 @@ class RobotArmAgent:
             "failure_type": failure_type,
             "agent_rounds": agent_rounds,
             "physical_tool_calls": physical_tool_calls_count,
+            "physical_actions": physical_tool_calls_count,
+            "observation_calls": observation_calls_count,
         }

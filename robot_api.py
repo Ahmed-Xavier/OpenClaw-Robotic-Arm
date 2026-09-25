@@ -93,6 +93,20 @@ class RobotAPI:
         self._sphere_body_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_BODY, "blue_sphere"
         )
+        self._cube_geom_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_GEOM, "cube_geom"
+        )
+        self._sphere_geom_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_GEOM, "sphere_geom"
+        )
+        self._gripper_geom_ids = []
+        for i in range(1, 5):
+            fid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, f"fixed_jaw_pad_{i}")
+            if fid != -1:
+                self._gripper_geom_ids.append(fid)
+            mid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, f"moving_jaw_pad_{i}")
+            if mid != -1:
+                self._gripper_geom_ids.append(mid)
 
         # Reset to home configuration
         self.data.qpos[:6] = HOME_QPOS
@@ -104,6 +118,7 @@ class RobotAPI:
             mujoco.mj_step(self.model, self.data)
 
         self._holding = False
+        self._held_object = None
         self._render = render
         self._viewer = None
         self._running = True
@@ -271,21 +286,131 @@ class RobotAPI:
         return True, None, None, ik_dist
 
     # ------------------------------------------------------------------ #
+    # Object Resolution & Physical Verification Helpers
+    # ------------------------------------------------------------------ #
+
+    def _resolve_object_target(self, target):
+        """Resolve a target name to (canonical_name, body_id).
+
+        Recognizes natural synonyms such as:
+          - 'cube', 'red cube', 'red_cube', 'red_box', 'box' -> ('cube', self._cube_body_id)
+          - 'sphere', 'blue sphere', 'blue_sphere', 'ball', 'blue ball' -> ('sphere', self._sphere_body_id)
+
+        Returns:
+            (canonical_name, body_id) if recognized and body exists in simulation.
+            (None, -1) if unknown or if the body is not present in the model.
+        """
+        if not target:
+            target_norm = "cube"
+        else:
+            target_norm = str(target).strip().lower().replace("-", " ")
+            target_norm = "_".join(target_norm.split())
+
+        cube_synonyms = {"cube", "red_cube", "red_box", "box"}
+        sphere_synonyms = {"sphere", "blue_sphere", "ball", "blue_ball"}
+
+        if target_norm in cube_synonyms:
+            if self._cube_body_id != -1:
+                return "cube", self._cube_body_id
+            return None, -1
+
+        if target_norm in sphere_synonyms:
+            if self._sphere_body_id != -1:
+                return "sphere", self._sphere_body_id
+            return None, -1
+
+        return None, -1
+
+    def _has_gripper_contact(self, obj_name: str) -> bool:
+        """Check if any contact pair in MuJoCo currently exists between gripper pads and the object."""
+        target_geom = self._sphere_geom_id if obj_name == "sphere" else self._cube_geom_id
+        if target_geom == -1:
+            return False
+        gripper_geoms = set(self._gripper_geom_ids)
+        for i in range(self.data.ncon):
+            c = self.data.contact[i]
+            if (c.geom1 == target_geom and c.geom2 in gripper_geoms) or \
+               (c.geom2 == target_geom and c.geom1 in gripper_geoms):
+                return True
+        return False
+
+    def _verify_and_update_holding(self) -> bool:
+        """Physically verify whether the robot is actually holding an object.
+
+        Rules:
+        - Holding state is NEVER inferred merely from issued commands.
+        - If the robot was recorded as holding an object, verify its live physical relation:
+          1. Object body must still exist in simulation.
+          2. Distance from grasp site to object center must be within grasp envelope (<= 0.045m).
+          3. If the gripper has been opened (openness > 0.5) and the object has separated or
+             fallen to the floor below the gripper, holding is set to False.
+        """
+        if not self._holding or not self._held_object:
+            self._holding = False
+            self._held_object = None
+            return False
+
+        obj_name, obj_body_id = self._resolve_object_target(self._held_object)
+        if obj_body_id == -1 or obj_name is None:
+            self._holding = False
+            self._held_object = None
+            return False
+
+        eef_pos = self.data.site_xpos[self._site_id]
+        obj_pos = self.data.xpos[obj_body_id]
+        dist = float(np.linalg.norm(eef_pos - obj_pos))
+
+        jaw_pos = float(self.data.qpos[5])
+        openness = float(np.clip((jaw_pos - JAW_CLOSED) / (JAW_OPEN - JAW_CLOSED), 0.0, 1.0))
+
+        # 1. If distance from grasp site exceeds threshold, object has physically separated/fallen
+        if dist > 0.045:
+            self._holding = False
+            self._held_object = None
+            return False
+
+        # 2. If gripper is open (openness > 0.5) and object has fallen below the grasp site
+        if openness > 0.5 and (eef_pos[2] - obj_pos[2] > 0.025 or obj_pos[2] <= 0.02):
+            self._holding = False
+            self._held_object = None
+            return False
+
+        # 3. If gripper is wide open (openness > 0.65) and no gripper contact exists
+        if openness > 0.65 and not self._has_gripper_contact(obj_name):
+            self._holding = False
+            self._held_object = None
+            return False
+
+        return True
+
+    def _is_in_workspace(self, pos: np.ndarray) -> bool:
+        """Check if [x, y, z] is within the reachable workspace envelope."""
+        return bool(
+            REACHABLE_ENVELOPE["x"][0] <= pos[0] <= REACHABLE_ENVELOPE["x"][1] and
+            REACHABLE_ENVELOPE["y"][0] <= pos[1] <= REACHABLE_ENVELOPE["y"][1] and
+            REACHABLE_ENVELOPE["z"][0] <= pos[2] <= REACHABLE_ENVELOPE["z"][1]
+        )
+
+    # ------------------------------------------------------------------ #
     # Public Robot API — Debugging / telemetry
     # ------------------------------------------------------------------ #
 
     def get_state(self):
         """Return a structured dictionary of live simulation telemetry (debug/full)."""
+        self._verify_and_update_holding()
         cube_pos = self.data.xpos[self._cube_body_id].copy()
         cube_vel = self.data.cvel[self._cube_body_id].copy()
         eef_pos = self.data.site_xpos[self._site_id].copy()
         joint_qpos = self.data.qpos[:6].tolist()
         jaw_pos = float(self.data.qpos[5])
+        openness = float(np.clip((jaw_pos - JAW_CLOSED) / (JAW_OPEN - JAW_CLOSED), 0.0, 1.0))
 
         dist_to_cube = float(np.linalg.norm(eef_pos - cube_pos))
 
         st = {
-            "holding_cube": self._holding,
+            "holding": self._holding,
+            "held_object": self._held_object if self._holding else None,
+            "holding_cube": bool(self._holding and self._held_object == "cube"),
             "dist_to_cube": dist_to_cube,
             "eef_position": {
                 "x": float(eef_pos[0]),
@@ -297,10 +422,11 @@ class RobotAPI:
                 "y": float(cube_pos[1]),
                 "z": float(cube_pos[2]),
             },
+            "cube_in_workspace": self._is_in_workspace(cube_pos),
             "gripper": {
-                "openness": float(np.clip((jaw_pos - JAW_CLOSED) / (JAW_OPEN - JAW_CLOSED), 0.0, 1.0)),
+                "openness": openness,
                 "raw_rad": jaw_pos,
-                "is_closed": self._holding,
+                "is_closed": bool(openness < 0.15),
             },
             "joints_rad": dict(zip(JOINT_NAMES, joint_qpos)),
             "sim_time": float(self.data.time),
@@ -314,6 +440,8 @@ class RobotAPI:
                 "z": float(sphere_pos[2]),
             }
             st["dist_to_sphere"] = float(np.linalg.norm(eef_pos - sphere_pos))
+            st["sphere_in_workspace"] = self._is_in_workspace(sphere_pos)
+            st["holding_sphere"] = bool(self._holding and self._held_object == "sphere")
 
         return st
 
@@ -323,6 +451,7 @@ class RobotAPI:
         Intentionally avoids joint angles, sim_time, and other fields that
         the LLM does not need and that waste context budget.
         """
+        self._verify_and_update_holding()
         eef = self.data.site_xpos[self._site_id].copy()
         cube = self.data.xpos[self._cube_body_id].copy()
         jaw_pos = float(self.data.qpos[5])
@@ -335,12 +464,16 @@ class RobotAPI:
             "robot": robot_label,
             "gripper": gripper_label,
             "holding": self._holding,
+            "held_object": self._held_object if self._holding else None,
             "eef": [round(float(eef[0]), 4), round(float(eef[1]), 4), round(float(eef[2]), 4)],
             "cube": [round(float(cube[0]), 4), round(float(cube[1]), 4), round(float(cube[2]), 4)],
+            "cube_in_workspace": self._is_in_workspace(cube),
         }
         if self._sphere_body_id != -1:
             sphere = self.data.xpos[self._sphere_body_id].copy()
             sem["sphere"] = [round(float(sphere[0]), 4), round(float(sphere[1]), 4), round(float(sphere[2]), 4)]
+            sem["sphere_in_workspace"] = self._is_in_workspace(sphere)
+            sem["sphere_dist_to_robot"] = round(float(np.linalg.norm(eef - sphere)), 4)
 
         return sem
 
@@ -430,12 +563,17 @@ class RobotAPI:
                               f"({position_error*100:.1f} cm > {MOVE_TOLERANCE_M*100:.0f} cm).",
             )
 
+        # After motion, verify whether held object is still physically held
+        self._verify_and_update_holding()
+
         return self._make_result("move_to", result=result_detail)
 
     def gripper(self, value, steps=60):
         """Set gripper openness: 0.0 = fully open, 1.0 = fully closed.
 
         Returns a structured result with the commanded and actual jaw openness.
+        Gripper state (is_closed) reflects physical jaw position, NOT holding state.
+        Holding state is physically verified after jaw actuation.
         """
         try:
             val = float(value)
@@ -459,17 +597,20 @@ class RobotAPI:
         target_ctrl[5] = jaw_target
         self._step_to_ctrl(target_ctrl, steps=steps)
 
-        # NOTE: gripper openness does NOT determine holding state.
-        # self._holding is authoritative and is only set by pick() (verified
-        # via position heuristic) and cleared by pick() failure / place().
-
         jaw_pos = float(self.data.qpos[5])
         openness = float(np.clip((jaw_pos - JAW_CLOSED) / (JAW_OPEN - JAW_CLOSED), 0.0, 1.0))
+        is_closed = bool(openness < 0.15)
+
+        # Physical reality check: opening gripper does NOT set holding=False automatically,
+        # but if the object physically falls away or loses contact, holding becomes False.
+        self._verify_and_update_holding()
 
         return self._make_result("gripper", result={
             "commanded": round(val, 4),
             "openness": round(openness, 4),
-            "is_closed": self._holding,
+            "is_closed": is_closed,
+            "holding": self._holding,
+            "held_object": self._held_object if self._holding else None,
         })
 
     def pick(self, target="cube", approach_dist=0.06, hover_height=0.08, steps=80):
@@ -479,27 +620,30 @@ class RobotAPI:
         sequencing (open → approach → slide-in → settle → close → lift)
         happens deterministically here.
 
-        Phase 4:
-          - Precondition: not already holding.
+        Preconditions:
+          - Not already holding an object.
+          - Target object must exist in simulation (no silent fallback).
+        Verification:
           - Uses position heuristic for grasp verification (not force sensing).
-          - Returns structured result with grasp_verification block.
+          - Sets holding=True only after lift test confirms the object rose.
         """
         # Precondition: must not already be holding
+        self._verify_and_update_holding()
         if self._holding:
-            held = getattr(self, "_held_object", "an object") or "an object"
+            held = self._held_object or "an object"
             return self._make_result(
                 "pick",
                 error_code="INVALID_STATE",
                 error_message=f"Robot is already holding {held}.",
             )
 
-        target_str = str(target).strip().lower() if target else "cube"
-        if target_str == "sphere" and self._sphere_body_id != -1:
-            obj_body_id = self._sphere_body_id
-            obj_name = "sphere"
-        else:
-            obj_body_id = self._cube_body_id
-            obj_name = "cube"
+        obj_name, obj_body_id = self._resolve_object_target(target)
+        if obj_name is None or obj_body_id == -1:
+            return self._make_result(
+                "pick",
+                error_code="OBJECT_NOT_FOUND",
+                error_message=f"Target object '{target}' not found in simulation.",
+            )
 
         obj_pos = self.data.xpos[obj_body_id].copy()
         x, y, z = obj_pos[0], obj_pos[1], obj_pos[2]
@@ -615,12 +759,11 @@ class RobotAPI:
     def place(self, x, y, z, hover_height=0.08, steps=80):
         """Place held object at target [x, y, z] position.
 
-        Phase 5:
-          - Precondition: must be holding an object.
-          - Returns NOT_HOLDING if not holding.
-          - Returns target_error after release.
+        Preconditions:
+          - Must be holding an object (verified physically).
         """
         # Precondition — must be holding
+        self._verify_and_update_holding()
         if not self._holding:
             return self._make_result(
                 "place",
@@ -628,14 +771,19 @@ class RobotAPI:
                 error_message="Cannot place because the robot is not holding an object.",
             )
 
-        # Phase 2 — validate target via RobotAPI safety check
-        # Place target at surface level — validate the hover position as reachable
+        # Validate target via RobotAPI safety check
         ok, err_code, err_msg, _ = self._validate_target(x, y, z + hover_height)
         if not ok:
             return self._make_result("place", error_code=err_code, error_message=err_msg)
 
-        held_obj = getattr(self, "_held_object", "cube") or "cube"
-        obj_id = self._sphere_body_id if held_obj == "sphere" and self._sphere_body_id != -1 else self._cube_body_id
+        held_obj = self._held_object or "cube"
+        obj_name, obj_id = self._resolve_object_target(held_obj)
+        if obj_id == -1 or obj_name is None:
+            return self._make_result(
+                "place",
+                error_code="OBJECT_NOT_FOUND",
+                error_message=f"Held object '{held_obj}' not found in simulation.",
+            )
 
         print(f"[robot_api] Placing {held_obj} at ({x:+.3f}, {y:+.3f}, {z:+.3f})...")
         self.move_to(x, y, z + hover_height, steps=steps)
@@ -665,7 +813,9 @@ class RobotAPI:
         target_ctrl = HOME_QPOS.copy()
         self._step_to_ctrl(target_ctrl, steps=steps)
 
-        # Phase 1 — reset_home previously returned None; now returns structured result
+        # Verify holding state after motion
+        self._verify_and_update_holding()
+
         eef_pos = self.data.site_xpos[self._site_id].copy()
         return self._make_result("reset_home", result={
             "eef": [round(float(eef_pos[0]), 4),

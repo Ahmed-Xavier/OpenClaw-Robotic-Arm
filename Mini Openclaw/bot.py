@@ -46,6 +46,15 @@ _RETRY_BACKOFF_SECONDS = 0.5
 _RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 
 
+class ConnectionState:
+    """Telegram runner runtime connection states."""
+    CONNECTED = "CONNECTED"
+    DEGRADED = "DEGRADED"
+    RECONNECTING = "RECONNECTING"
+    OFFLINE = "OFFLINE"
+    STOPPED = "STOPPED"
+
+
 class TelegramRequestFailure:
     """Last failure from a Telegram API request, with no secret material."""
 
@@ -320,20 +329,14 @@ class TelegramClient:
         api_method: str,
         *,
         timeout: float,
-        retry_network: str = "never",
-        retry_http: bool = False,
+        retry_network: str = "all",
+        retry_http: bool = True,
         **kwargs: Any,
     ) -> Optional[requests.Response]:
-        """Make a bounded Telegram request without retrying unsafe delivery.
-
-        ``retry_network`` is ``all`` for idempotent calls, ``dns`` for a
-        visible delivery that is known not to have left this machine, and
-        ``never`` when a repeated request could duplicate a user-visible item.
-        """
+        """Make a bounded Telegram request with retry/backoff for transient failures."""
         self.last_failure = None
         for attempt in range(1, _RETRY_ATTEMPTS + 1):
-            # requests consumes file bodies.  Rewind them before a DNS-only
-            # photo retry so the retry is a complete upload, not an empty one.
+            # Rewind file streams before photo retries
             if attempt > 1:
                 for file_value in (kwargs.get("files") or {}).values():
                     file_obj = file_value[1] if isinstance(file_value, tuple) else file_value
@@ -346,44 +349,60 @@ class TelegramClient:
             except requests.exceptions.RequestException as exc:
                 failure = _request_failure(exc)
                 self.last_failure = failure
-                should_retry = failure.transient and (
-                    retry_network == "all"
-                    or (retry_network == "dns" and failure.category == "DNS")
-                )
+                # retry_network="dns_only": only safe to retry when DNS failed,
+                # meaning no TCP connection was established and the request
+                # definitely did not reach Telegram (idempotent-safe retry).
+                # retry_network="all": retry all transient failures.
+                # retry_network="never": never retry.
+                if retry_network == "dns_only":
+                    should_retry = failure.category == "DNS"
+                else:
+                    should_retry = failure.transient and retry_network != "never"
                 if should_retry and attempt < _RETRY_ATTEMPTS:
+                    delay = _RETRY_BACKOFF_SECONDS * attempt
                     logger.warning(
-                        "Telegram network error during %s; retrying (%d/%d): %s",
-                        api_method, attempt, _RETRY_ATTEMPTS, failure.detail,
+                        "Telegram %s: attempt %d/%d (%s: %s); retrying in %.1fs...",
+                        api_method, attempt, _RETRY_ATTEMPTS, failure.category, failure.detail, delay,
                     )
-                    time.sleep(_RETRY_BACKOFF_SECONDS * attempt)
+                    time.sleep(delay)
                     continue
-                logger.warning("Telegram network error during %s: %s", api_method, failure.detail)
+                logger.warning(
+                    "Telegram %s: attempt %d/%d failed (%s: %s)",
+                    api_method, attempt, _RETRY_ATTEMPTS, failure.category, failure.detail,
+                )
                 return None
 
             if response.status_code in (401, 404):
                 self.last_failure = TelegramRequestFailure(
                     "AUTH", f"Telegram authentication failure (HTTP {response.status_code})", False
                 )
-                logger.error("Telegram authentication failure during %s", api_method)
+                logger.error("Telegram %s: authentication failure (HTTP %d)", api_method, response.status_code)
                 return response
+
             if response.status_code in _RETRYABLE_HTTP_STATUSES and retry_http:
+                delay = _RETRY_BACKOFF_SECONDS * attempt
                 if attempt < _RETRY_ATTEMPTS:
                     logger.warning(
-                        "Telegram API error during %s (HTTP %d); retrying (%d/%d)",
-                        api_method, response.status_code, attempt, _RETRY_ATTEMPTS,
+                        "Telegram %s: attempt %d/%d returned HTTP %d; retrying in %.1fs...",
+                        api_method, attempt, _RETRY_ATTEMPTS, response.status_code, delay,
                     )
-                    time.sleep(_RETRY_BACKOFF_SECONDS * attempt)
+                    time.sleep(delay)
                     continue
                 self.last_failure = TelegramRequestFailure(
-                    "API", f"Telegram API error HTTP {response.status_code}", True
+                    "HTTP_5XX" if response.status_code >= 500 else "RATE_LIMIT",
+                    f"Telegram API error HTTP {response.status_code}",
+                    True,
                 )
-                logger.warning("Telegram API error during %s: HTTP %d", api_method, response.status_code)
+                logger.warning("Telegram %s: HTTP %d (retries exhausted)", api_method, response.status_code)
                 return response
+
             if response.status_code >= 400:
                 self.last_failure = TelegramRequestFailure(
                     "API", f"Telegram API error HTTP {response.status_code}", False
                 )
-                logger.warning("Telegram API error during %s: HTTP %d", api_method, response.status_code)
+                logger.warning("Telegram %s: non-retryable HTTP %d", api_method, response.status_code)
+                return response
+
             return response
 
         return None
@@ -441,7 +460,7 @@ class TelegramClient:
             payload["reply_markup"] = reply_markup
         r = self._request(
             "POST", "sendMessage", json=payload, timeout=15,
-            retry_network="dns", retry_http=True,
+            retry_network="dns_only", retry_http=True,
         )
         if r is None or r.status_code >= 400:
             logger.error("Telegram delivery permanently failed for chat %s", chat_id)
@@ -511,7 +530,7 @@ class TelegramClient:
                 data = {"chat_id": chat_id, "caption": caption}
                 r = self._request(
                     "POST", "sendPhoto", data=data, files=files, timeout=20,
-                    retry_network="dns", retry_http=True,
+                    retry_network="dns_only", retry_http=True,
                 )
             if r is None or r.status_code >= 400:
                 logger.error("Telegram photo delivery permanently failed for chat %s", chat_id)
@@ -545,7 +564,10 @@ class _TypingKeepAlive:
     def _run(self):
         # Send immediately, then repeat until stopped
         while not self._stop.is_set():
-            self._client.send_chat_action(self._chat_id, "typing")
+            try:
+                self._client.send_chat_action(self._chat_id, "typing")
+            except Exception as e:
+                logger.debug("Typing keep-alive non-fatal failure: %s", e)
             self._stop.wait(timeout=self._INTERVAL)
 
     def __enter__(self):
@@ -673,6 +695,7 @@ class TelegramBotRunner:
         self.event_bus = event_bus
         self.running = False
         self.polling_online = False
+        self.connection_state = ConnectionState.STOPPED
         self._stop_event = threading.Event()
         self._offline = False
         self._poll_failures = 0
@@ -866,7 +889,21 @@ class TelegramBotRunner:
                             chat_id=chat_id,
                             status_callback=status_cb,
                         )
-
+                except Exception as e:
+                    logger.error("Unhandled error processing chat message: %s", e, exc_info=True)
+                    if self.event_bus:
+                        self.event_bus.emit("error", "telegram", {
+                            "msg": str(e),
+                            "chat_id": chat_id,
+                        })
+                    try:
+                        self.client.send_message(
+                            chat_id,
+                            f"An error occurred while handling your request: {e}",
+                        )
+                    except Exception:
+                        pass
+                else:
                     reply_text = result.get("reply", "Done.")
                     photos = result.get("photos", [])
 
@@ -878,33 +915,27 @@ class TelegramBotRunner:
                         })
 
                     # Clean up status message if it exists (final reply replaces it)
+                    delivery_done = False
                     if status_msg_ref[0] is not None:
-                        # Delete the interim status message and send the real reply
-                        # (Telegram doesn't have delete in basic API without admin rights;
-                        # edit it to empty or just send the reply as a new message)
-                        self.client.edit_message_text(
-                            chat_id, status_msg_ref[0], f"💬 {reply_text}"
-                        )
-                    else:
-                        if reply_text:
+                        try:
+                            delivery_done = self.client.edit_message_text(
+                                chat_id, status_msg_ref[0], f"💬 {reply_text}"
+                            )
+                        except Exception as de:
+                            logger.error("Error editing status message to final reply: %s", de)
+                    if not delivery_done and reply_text:
+                        try:
                             self.client.send_message(chat_id, reply_text)
+                        except Exception as me:
+                            logger.error("Error sending final reply message: %s", me)
 
                     # Send photos if any camera shots were taken
                     for photo_path in photos:
                         if os.path.exists(photo_path):
-                            self.client.send_photo(chat_id, photo_path, caption="Camera snapshot")
-
-                except Exception as e:
-                    logger.error("Unhandled error processing chat message: %s", e, exc_info=True)
-                    if self.event_bus:
-                        self.event_bus.emit("error", "telegram", {
-                            "msg": str(e),
-                            "chat_id": chat_id,
-                        })
-                    self.client.send_message(
-                        chat_id,
-                        f"An error occurred while handling your request: {e}",
-                    )
+                            try:
+                                self.client.send_photo(chat_id, photo_path, caption="Camera snapshot")
+                            except Exception as pe:
+                                logger.error("Error sending photo: %s", pe)
                 finally:
                     if self.event_bus:
                         self.event_bus.emit("agent_end", "telegram", {
@@ -941,26 +972,35 @@ class TelegramBotRunner:
                     # conflicted loop alive and risk two consumers.
                     if category == "AUTH":
                         logger.error("Telegram authentication failure; polling stopped")
+                        self.connection_state = ConnectionState.STOPPED
                         self.running = False
                         break
                     if category == "API" and failure and not failure.transient:
                         logger.error("Telegram API error is not retryable; polling stopped: %s", detail)
+                        self.connection_state = ConnectionState.STOPPED
                         self.running = False
                         break
 
                     self.polling_online = False
                     self._poll_failures += 1
+                    delay = min(30.0, float(2 ** min(self._poll_failures - 1, 5)))
                     if not self._offline:
                         self._offline = True
-                        logger.warning("Telegram temporarily offline: %s", detail)
+                        self.connection_state = ConnectionState.OFFLINE
+                        logger.warning("Telegram offline: %s. Reconnecting in %.0fs...", detail, delay)
                         if self.event_bus:
-                            self.event_bus.emit("system", "telegram", {
-                                "msg": "Telegram temporarily offline",
+                            self.event_bus.emit("connection_state", "telegram", {
+                                "state": ConnectionState.OFFLINE,
                                 "detail": detail,
                             })
-                    delay = min(30.0, float(2 ** min(self._poll_failures - 1, 5)))
-                    if self._poll_failures == 1 or self._poll_failures % 5 == 0:
-                        logger.info("Telegram reconnect attempt %d in %.0fs", self._poll_failures, delay)
+                            self.event_bus.emit("system", "telegram", {
+                                "msg": "Telegram offline",
+                                "detail": detail,
+                            })
+                    else:
+                        self.connection_state = ConnectionState.RECONNECTING
+                        if self._poll_failures == 1 or self._poll_failures % 5 == 0:
+                            logger.info("Telegram reconnect attempt %d in %.0fs (%s)", self._poll_failures, delay, detail)
                     self._stop_event.wait(delay)
                     continue
 
@@ -972,9 +1012,11 @@ class TelegramBotRunner:
                 if self._offline:
                     self._offline = False
                     self._poll_failures = 0
-                    logger.info("Telegram reconnected")
+                    self.connection_state = ConnectionState.CONNECTED
+                    logger.info("Telegram connection restored")
                     if self.event_bus:
-                        self.event_bus.emit("system", "telegram", {"msg": "Telegram reconnected"})
+                        self.event_bus.emit("connection_state", "telegram", {"state": ConnectionState.CONNECTED})
+                        self.event_bus.emit("system", "telegram", {"msg": "Telegram connection restored"})
                 for update in updates:
                     offset = update["update_id"] + 1
 
@@ -1022,6 +1064,7 @@ class TelegramBotRunner:
             return
         self.running = False
         self.polling_online = False
+        self.connection_state = ConnectionState.STOPPED
         self._stop_event.set()
         with self.lock:
             for q in self.chat_queues.values():
