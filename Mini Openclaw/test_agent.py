@@ -76,12 +76,12 @@ class TestSchemaAndValidation(unittest.TestCase):
         self.agent = RobotArmAgent()
 
     def test_tools_schema_loaded(self):
-        """All 9 endpoints must be present in tools_schema.json."""
+        """All expected tools must be present in tools_schema.json."""
         self.assertTrue(TOOLS_SCHEMA_PATH.exists())
         names = {t["function"]["name"] for t in self.agent.tools}
         expected = {
             "move_to", "pick", "place", "gripper",
-            "state", "camera", "reset_home", "scenario", "collisions"
+            "state", "camera", "reset_home", "go_home", "scenario", "collisions"
         }
         self.assertEqual(names, expected, f"Missing or extra tools: {expected.symmetric_difference(names)}")
 
@@ -137,7 +137,7 @@ class TestSchemaAndValidation(unittest.TestCase):
         self.assertFalse(self.agent.validate_tool_call("scenario", {"name": "D"})[0])
 
     def test_validation_zero_arg_tools(self):
-        for tool in ("pick", "state", "camera", "reset_home", "collisions"):
+        for tool in ("pick", "state", "camera", "reset_home", "go_home", "collisions"):
             valid, err = self.agent.validate_tool_call(tool, {})
             self.assertTrue(valid, f"Failed for {tool}: {err}")
 

@@ -87,18 +87,34 @@ class RobotAPI:
         self._site_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_SITE, "grasp_site"
         )
-        self._cube_body_id = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_BODY, "red_cube"
-        )
-        self._sphere_body_id = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_BODY, "blue_sphere"
-        )
-        self._cube_geom_id = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_GEOM, "cube_geom"
-        )
-        self._sphere_geom_id = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_GEOM, "sphere_geom"
-        )
+        # Discover manipulatable objects and register stable IDs and synonyms
+        self._registered_objects = {}  # canonical_name -> {"body_id": int, "geom_id": int, "body_name": str, "geom_name": str}
+        self._object_aliases = {}      # synonym -> canonical_name
+
+        object_definitions = [
+            ("cube_1", "red_cube", "cube_geom", ["cube", "cube_1", "red_cube", "red_box", "box"]),
+            ("cube_2", "green_cube", "green_cube_geom", ["cube_2", "green_cube", "green_box"]),
+            ("cube_3", "yellow_cube", "yellow_cube_geom", ["cube_3", "yellow_cube", "yellow_box"]),
+            ("sphere", "blue_sphere", "sphere_geom", ["sphere", "sphere_1", "blue_sphere", "ball", "blue_ball"]),
+        ]
+        for canon, body_name, geom_name, syns in object_definitions:
+            bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+            gid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+            if bid != -1:
+                self._registered_objects[canon] = {
+                    "body_id": bid,
+                    "geom_id": gid,
+                    "body_name": body_name,
+                    "geom_name": geom_name,
+                }
+                for s in syns:
+                    self._object_aliases[s] = canon
+
+        # Backward compatibility properties
+        self._cube_body_id = self._registered_objects.get("cube_1", {}).get("body_id", -1)
+        self._sphere_body_id = self._registered_objects.get("sphere", {}).get("body_id", -1)
+        self._cube_geom_id = self._registered_objects.get("cube_1", {}).get("geom_id", -1)
+        self._sphere_geom_id = self._registered_objects.get("sphere", {}).get("geom_id", -1)
         self._gripper_geom_ids = []
         for i in range(1, 5):
             fid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, f"fixed_jaw_pad_{i}")
@@ -199,8 +215,9 @@ class RobotAPI:
 
         return best_q, best_dist  # return achieved IK distance too
 
-    def _step_to_ctrl(self, target_ctrl, steps=100):
-        """Smoothly interpolate actuator targets over `steps` simulation steps."""
+    def _step_to_ctrl(self, target_ctrl, steps=100, settle_steps=80):
+        """Smoothly interpolate actuator targets over `steps` simulation steps,
+        then settle for `settle_steps` to allow physical actuators to reach target."""
         self._busy_moving = True
         try:
             start_ctrl = self.data.ctrl.copy()
@@ -212,6 +229,12 @@ class RobotAPI:
                 mujoco.mj_step(self.model, self.data)
 
                 if self._render and s % 2 == 0:
+                    self._sync()
+                    time.sleep(dt * 1.2)
+
+            for s in range(settle_steps):
+                mujoco.mj_step(self.model, self.data)
+                if self._render and s % 3 == 0:
                     self._sync()
                     time.sleep(dt * 1.2)
         finally:
@@ -293,8 +316,10 @@ class RobotAPI:
         """Resolve a target name to (canonical_name, body_id).
 
         Recognizes natural synonyms such as:
-          - 'cube', 'red cube', 'red_cube', 'red_box', 'box' -> ('cube', self._cube_body_id)
-          - 'sphere', 'blue sphere', 'blue_sphere', 'ball', 'blue ball' -> ('sphere', self._sphere_body_id)
+          - 'cube_1', 'cube', 'red_cube', 'red_box', 'box' -> ('cube_1', body_id)
+          - 'cube_2', 'green_cube', 'green_box' -> ('cube_2', body_id)
+          - 'cube_3', 'yellow_cube', 'yellow_box' -> ('cube_3', body_id)
+          - 'sphere', 'blue_sphere', 'ball', 'blue_ball' -> ('sphere', body_id)
 
         Returns:
             (canonical_name, body_id) if recognized and body exists in simulation.
@@ -306,24 +331,22 @@ class RobotAPI:
             target_norm = str(target).strip().lower().replace("-", " ")
             target_norm = "_".join(target_norm.split())
 
-        cube_synonyms = {"cube", "red_cube", "red_box", "box"}
-        sphere_synonyms = {"sphere", "blue_sphere", "ball", "blue_ball"}
+        canon = self._object_aliases.get(target_norm)
+        if canon and canon in self._registered_objects:
+            return canon, self._registered_objects[canon]["body_id"]
 
-        if target_norm in cube_synonyms:
-            if self._cube_body_id != -1:
-                return "cube", self._cube_body_id
-            return None, -1
-
-        if target_norm in sphere_synonyms:
-            if self._sphere_body_id != -1:
-                return "sphere", self._sphere_body_id
-            return None, -1
+        for c, info in self._registered_objects.items():
+            if target_norm == info["body_name"] or target_norm == c:
+                return c, info["body_id"]
 
         return None, -1
 
     def _has_gripper_contact(self, obj_name: str) -> bool:
         """Check if any contact pair in MuJoCo currently exists between gripper pads and the object."""
-        target_geom = self._sphere_geom_id if obj_name == "sphere" else self._cube_geom_id
+        canon, _ = self._resolve_object_target(obj_name)
+        if not canon or canon not in self._registered_objects:
+            return False
+        target_geom = self._registered_objects[canon]["geom_id"]
         if target_geom == -1:
             return False
         gripper_geoms = set(self._gripper_geom_ids)
@@ -342,8 +365,10 @@ class RobotAPI:
         - If the robot was recorded as holding an object, verify its live physical relation:
           1. Object body must still exist in simulation.
           2. Distance from grasp site to object center must be within grasp envelope (<= 0.045m).
-          3. If the gripper has been opened (openness > 0.5) and the object has separated or
+          3. If the gripper has been opened (openness > 0.4) and the object has separated or
              fallen to the floor below the gripper, holding is set to False.
+          4. If the gripper is open (openness > 0.4) and no gripper contact exists,
+             holding is set to False.
         """
         if not self._holding or not self._held_object:
             self._holding = False
@@ -369,14 +394,14 @@ class RobotAPI:
             self._held_object = None
             return False
 
-        # 2. If gripper is open (openness > 0.5) and object has fallen below the grasp site
-        if openness > 0.5 and (eef_pos[2] - obj_pos[2] > 0.025 or obj_pos[2] <= 0.02):
+        # 2. If gripper is open (openness > 0.4) and object has fallen below the grasp site
+        if openness > 0.4 and (eef_pos[2] - obj_pos[2] > 0.025 or obj_pos[2] <= 0.02):
             self._holding = False
             self._held_object = None
             return False
 
-        # 3. If gripper is wide open (openness > 0.65) and no gripper contact exists
-        if openness > 0.65 and not self._has_gripper_contact(obj_name):
+        # 3. If gripper is open (openness > 0.4) and no gripper contact exists
+        if openness > 0.4 and not self._has_gripper_contact(obj_name):
             self._holding = False
             self._held_object = None
             return False
@@ -398,8 +423,8 @@ class RobotAPI:
     def get_state(self):
         """Return a structured dictionary of live simulation telemetry (debug/full)."""
         self._verify_and_update_holding()
-        cube_pos = self.data.xpos[self._cube_body_id].copy()
-        cube_vel = self.data.cvel[self._cube_body_id].copy()
+        cube_pos = self.data.xpos[self._cube_body_id].copy() if self._cube_body_id != -1 else np.zeros(3)
+        cube_vel = self.data.cvel[self._cube_body_id].copy() if self._cube_body_id != -1 else np.zeros(6)
         eef_pos = self.data.site_xpos[self._site_id].copy()
         joint_qpos = self.data.qpos[:6].tolist()
         jaw_pos = float(self.data.qpos[5])
@@ -407,10 +432,26 @@ class RobotAPI:
 
         dist_to_cube = float(np.linalg.norm(eef_pos - cube_pos))
 
+        objects_telemetry = {}
+        for canon, info in self._registered_objects.items():
+            bid = info["body_id"]
+            if bid != -1:
+                o_pos = self.data.xpos[bid].copy()
+                objects_telemetry[canon] = {
+                    "position": {
+                        "x": float(o_pos[0]),
+                        "y": float(o_pos[1]),
+                        "z": float(o_pos[2]),
+                    },
+                    "dist_to_eef": float(np.linalg.norm(eef_pos - o_pos)),
+                    "in_workspace": self._is_in_workspace(o_pos),
+                    "holding": bool(self._holding and self._held_object == canon),
+                }
+
         st = {
             "holding": self._holding,
             "held_object": self._held_object if self._holding else None,
-            "holding_cube": bool(self._holding and self._held_object == "cube"),
+            "holding_cube": bool(self._holding and str(self._held_object).startswith("cube")),
             "dist_to_cube": dist_to_cube,
             "eef_position": {
                 "x": float(eef_pos[0]),
@@ -430,6 +471,7 @@ class RobotAPI:
             },
             "joints_rad": dict(zip(JOINT_NAMES, joint_qpos)),
             "sim_time": float(self.data.time),
+            "objects": objects_telemetry,
         }
 
         if self._sphere_body_id != -1:
@@ -453,12 +495,22 @@ class RobotAPI:
         """
         self._verify_and_update_holding()
         eef = self.data.site_xpos[self._site_id].copy()
-        cube = self.data.xpos[self._cube_body_id].copy()
+        cube = self.data.xpos[self._cube_body_id].copy() if self._cube_body_id != -1 else np.zeros(3)
         jaw_pos = float(self.data.qpos[5])
         openness = float(np.clip((jaw_pos - JAW_CLOSED) / (JAW_OPEN - JAW_CLOSED), 0.0, 1.0))
 
         gripper_label = "open" if openness > 0.5 else "closed"
         robot_label = "holding" if self._holding else "ready"
+
+        objects_sem = {}
+        for canon, info in self._registered_objects.items():
+            bid = info["body_id"]
+            if bid != -1:
+                o_pos = self.data.xpos[bid].copy()
+                objects_sem[canon] = {
+                    "position": [round(float(o_pos[0]), 4), round(float(o_pos[1]), 4), round(float(o_pos[2]), 4)],
+                    "in_workspace": self._is_in_workspace(o_pos),
+                }
 
         sem = {
             "robot": robot_label,
@@ -466,6 +518,7 @@ class RobotAPI:
             "holding": self._holding,
             "held_object": self._held_object if self._holding else None,
             "eef": [round(float(eef[0]), 4), round(float(eef[1]), 4), round(float(eef[2]), 4)],
+            "objects": objects_sem,
             "cube": [round(float(cube[0]), 4), round(float(cube[1]), 4), round(float(cube[2]), 4)],
             "cube_in_workspace": self._is_in_workspace(cube),
         }
@@ -822,6 +875,11 @@ class RobotAPI:
                     round(float(eef_pos[1]), 4),
                     round(float(eef_pos[2]), 4)],
         })
+
+    def scenario(self, name: str, target: str = "cube") -> dict:
+        """Execute a named scenario through the deterministic skill layer."""
+        import skills
+        return skills.run_scenario(self, name=name, target=target)
 
     def close(self):
         self._running = False

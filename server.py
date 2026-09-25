@@ -134,11 +134,15 @@ def gripper():
         return _err(e)
 
 
+import skills
+
+
+@app.route("/go_home", methods=["POST"])
 @app.route("/reset_home", methods=["POST"])
-def reset_home():
-    """Return the arm to its home rest position."""
+def go_home():
+    """Return the arm to its home rest position via the high-level skill layer."""
     try:
-        result = robot.reset_home()
+        result = skills.go_home(robot)
         return _ok(result)
     except Exception as e:
         return _err(e)
@@ -219,38 +223,19 @@ def collisions():
 
 @app.route("/scenario", methods=["POST"])
 def scenario():
-    """Run a named pick-and-place scenario.
+    """Run a named pick-and-place scenario via the skills layer.
 
-    Body: {"name": "A" | "B" | "C"}
+    Body: {"name": "A" | "B" | "C", "target": "cube" (optional)}
 
-    A  — Pick cube, place at right pad (0.15, -0.18, 0.015), return home.
-    B  — Pick cube, place at left pad (-0.15, -0.18, 0.015), return home.
-    C  — Inspection wave: move up, save photo, sweep left/right, return home.
-
-    Returns get_semantic_state() on success, or {"error": ...} with HTTP 400.
+    Returns the standard structured result:
+        {"success": bool, "action": "scenario", "result": {...}, "error": {...}|null}
     """
     try:
-        body = request.get_json(force=True) or {}
+        body = request.get_json(force=True, silent=True) or {}
         name = str(body.get("name", "")).upper()
-
-        if name == "A":
-            robot.pick()
-            robot.place(0.15, -0.18, 0.015)
-            robot.reset_home()
-        elif name == "B":
-            robot.pick()
-            robot.place(-0.15, -0.18, 0.015)
-            robot.reset_home()
-        elif name == "C":
-            robot.move_to(0.0, -0.20, 0.16)
-            robot.save_camera_image("inspection_high.png")
-            robot.move_to(-0.12, -0.22, 0.12)
-            robot.move_to(0.12, -0.22, 0.12)
-            robot.reset_home()
-        else:
-            return _err("unknown scenario")
-
-        return _ok(robot.get_semantic_state())
+        target = body.get("target", "cube")
+        res = skills.run_scenario(robot, name=name, target=target)
+        return _ok(res)
     except Exception as e:
         return _err(e)
 

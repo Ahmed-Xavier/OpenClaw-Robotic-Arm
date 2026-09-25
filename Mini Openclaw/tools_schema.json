@@ -34,7 +34,7 @@
         "properties": {
           "target": {
             "type": "string",
-            "description": "Target object to pick up, e.g. 'cube' (red cube) or 'sphere' (blue sphere)."
+            "description": "Target object to pick up, e.g. 'cube_1'/'cube' (red cube), 'cube_2' (green cube), 'cube_3' (yellow cube), or 'sphere' (blue sphere)."
           }
         },
         "required": []
@@ -122,8 +122,20 @@
   {
     "type": "function",
     "function": {
+      "name": "go_home",
+      "description": "High-level skill: Return the robot arm safely to its home resting configuration and verify the home position. Safe to call at any time. Returns structured result contract with success=true.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "scenario",
-      "description": "Execute a pre-programmed pick-and-place or inspection scenario by name. A: pick cube and place on right pad (0.15, -0.18, 0.015) then return home. B: pick cube and place on left pad (-0.15, -0.18, 0.015) then return home. C: move arm up, save camera photo, sweep left and right, return home. Returns semantic state on completion.",
+      "description": "Execute a pre-programmed pick-and-place or inspection scenario by name via the deterministic skill layer. A: pick cube and place on right pad (0.15, -0.18, 0.015) then return home. B: pick cube and place on left pad (-0.15, -0.18, 0.015) then return home. C: move arm up, save camera photo, sweep left and right, return home. Returns structured result contract.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -131,6 +143,10 @@
             "type": "string",
             "enum": ["A", "B", "C"],
             "description": "Scenario: 'A' (place right), 'B' (place left), 'C' (inspection wave)."
+          },
+          "target": {
+            "type": "string",
+            "description": "Target object to manipulate in scenario A or B (default: 'cube')."
           }
         },
         "required": ["name"]

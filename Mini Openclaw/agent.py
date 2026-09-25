@@ -62,7 +62,7 @@ FAILURE_FINAL_RESPONSE_FAILED = "FINAL_RESPONSE_FAILED"  # action OK, LLM reply 
 
 # Tool classification: observation probes vs motor actions
 OBSERVATION_TOOLS = {"state", "camera", "collisions"}
-PHYSICAL_ACTION_TOOLS = {"move_to", "pick", "place", "gripper", "reset_home", "scenario"}
+PHYSICAL_ACTION_TOOLS = {"move_to", "pick", "place", "gripper", "reset_home", "go_home", "scenario"}
 
 
 def load_soul(soul_path: Path = SOUL_FILE_PATH) -> str:
@@ -145,7 +145,7 @@ class RobotArmAgent:
         """
         valid_tools = {
             "move_to", "pick", "place", "gripper",
-            "state", "camera", "reset_home", "scenario", "collisions"
+            "state", "camera", "reset_home", "go_home", "scenario", "collisions"
         }
         if tool_name not in valid_tools:
             return False, f"Unknown tool '{tool_name}'. Available tools: {sorted(list(valid_tools))}"
@@ -205,16 +205,27 @@ class RobotArmAgent:
                 return False, f"Scenario '{name}' is unknown. Must be one of {sorted(list(VALID_SCENARIOS))}."
             arguments["name"] = name
 
-        # Pick tool: optional target parameter ("cube" or "sphere", or natural synonyms)
+        # Pick tool: optional target parameter (multi-cube and sphere support)
         elif tool_name == "pick":
             if "target" in arguments and arguments["target"] is not None:
                 raw_target = str(arguments["target"]).strip().lower()
                 clean_target = "_".join(raw_target.replace("-", " ").split())
-                valid_cube = {"cube", "red_cube", "red_box", "box"}
-                valid_sphere = {"sphere", "blue_sphere", "ball", "blue_ball"}
-                if clean_target not in valid_cube and clean_target not in valid_sphere:
+                valid_cubes = {
+                    "cube", "cube_1", "cube_2", "cube_3",
+                    "red_cube", "green_cube", "yellow_cube",
+                    "red_box", "green_box", "yellow_box", "box"
+                }
+                valid_spheres = {"sphere", "sphere_1", "blue_sphere", "ball", "blue_ball"}
+                if clean_target not in valid_cubes and clean_target not in valid_spheres:
                     return False, f"Invalid pick target '{arguments.get('target')}'. Must be 'cube' or 'sphere'."
-                arguments["target"] = "sphere" if clean_target in valid_sphere else "cube"
+                if clean_target in valid_spheres:
+                    arguments["target"] = "sphere"
+                elif clean_target in {"cube_2", "green_cube", "green_box"}:
+                    arguments["target"] = "cube_2"
+                elif clean_target in {"cube_3", "yellow_cube", "yellow_box"}:
+                    arguments["target"] = "cube_3"
+                else:
+                    arguments["target"] = "cube"
 
         # state, camera, reset_home, collisions take no required params
         return True, None
@@ -348,11 +359,12 @@ class RobotArmAgent:
     def _action_label(tool_name: str, arguments: Dict[str, Any]) -> str:
         """Map a tool call to a user-facing status string."""
         labels = {
-            "pick": "Picking up the cube...",
-            "place": "Placing the cube...",
+            "pick": "Picking up the object...",
+            "place": "Placing the object...",
             "move_to": "Moving to position...",
             "gripper": "Adjusting gripper...",
             "reset_home": "Returning to home position...",
+            "go_home": "Returning to home position...",
             "state": "Checking state...",
             "camera": "Capturing camera image...",
             "collisions": "Checking collisions...",

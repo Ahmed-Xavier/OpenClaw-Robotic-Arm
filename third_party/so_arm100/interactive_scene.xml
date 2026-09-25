@@ -13,6 +13,8 @@
       markrgb="0.8 0.8 0.8" width="300" height="300"/>
     <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
     <material name="cube_mat" rgba="0.9 0.2 0.2 1"/>
+    <material name="green_cube_mat" rgba="0.2 0.8 0.3 1"/>
+    <material name="yellow_cube_mat" rgba="0.95 0.8 0.1 1"/>
     <material name="sphere_mat" rgba="0.15 0.55 0.95 1"/>
     <material name="target_mat_right" rgba="0.2 0.8 0.3 0.5"/>
     <material name="target_mat_left" rgba="0.2 0.4 0.9 0.5"/>
@@ -22,10 +24,24 @@
     <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
     <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
 
-    <!-- Manipulatable Cube -->
+    <!-- Manipulatable Cube 1 (Red) -->
     <body name="red_cube" pos="0 -0.22 0.015">
       <joint type="free"/>
       <geom name="cube_geom" type="box" size="0.012 0.012 0.012" material="cube_mat" density="400"
+            friction="2.0 0.1 0.005" solimp="2 1 0.01" solref="0.01 1"/>
+    </body>
+
+    <!-- Manipulatable Cube 2 (Green) -->
+    <body name="green_cube" pos="-0.08 -0.22 0.015">
+      <joint type="free"/>
+      <geom name="green_cube_geom" type="box" size="0.012 0.012 0.012" material="green_cube_mat" density="400"
+            friction="2.0 0.1 0.005" solimp="2 1 0.01" solref="0.01 1"/>
+    </body>
+
+    <!-- Manipulatable Cube 3 (Yellow) -->
+    <body name="yellow_cube" pos="0 -0.26 0.015">
+      <joint type="free"/>
+      <geom name="yellow_cube_geom" type="box" size="0.012 0.012 0.012" material="yellow_cube_mat" density="400"
             friction="2.0 0.1 0.005" solimp="2 1 0.01" solref="0.01 1"/>
     </body>
 
