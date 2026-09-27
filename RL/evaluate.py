@@ -1,14 +1,15 @@
-"""evaluate.py — Evaluate trained PPO policy on UR5e ReachEnv with visualization.
+"""evaluate.py — Evaluate trained PPO policy on UR5e ReachEnv, ObjectReachEnv, or GraspEnv with visualization.
 
 Evaluation Pipeline:
-1. Loads the trained PPO model from RL/models/ur5e_reach_ppo.zip.
-2. Instantiates ReachEnv with has_renderer=True (MuJoCo window).
+1. Loads the trained PPO model from RL/models/ (ur5e_reach_ppo, ur5e_object_reach_ppo, or ur5e_grasp_ppo).
+2. Instantiates environment with has_renderer=True (MuJoCo window).
 3. Executes multiple test episodes with deterministic policy actions.
 4. Renders each simulation step.
 5. Displays clear per-episode and aggregate metrics:
-   - Target position
+   - Target / Cube position
    - Final EEF position
    - Final distance
+   - Grasp / Contact status (for grasp env)
    - Success / Failure status
 """
 
@@ -30,6 +31,7 @@ from stable_baselines3 import PPO
 
 from RL.envs.reach_env import ReachEnv, SUCCESS_THRESHOLD
 from RL.envs.object_reach_env import ObjectReachEnv
+from RL.envs.grasp_env import GraspEnv
 
 
 def evaluate(
@@ -50,7 +52,12 @@ def evaluate(
         print(f"Please train a model first using: python RL/train.py --env {env_name}")
         sys.exit(1)
 
-    phase_label = "PHASE 1.5: UR5e ObjectReachEnv" if env_name == "object_reach" else "PHASE 1: UR5e ReachEnv"
+    if env_name == "grasp":
+        phase_label = "PHASE 2: UR5e GraspEnv"
+    elif env_name == "object_reach":
+        phase_label = "PHASE 1.5: UR5e ObjectReachEnv"
+    else:
+        phase_label = "PHASE 1: UR5e ReachEnv"
     print("=" * 75)
     print(f"  {phase_label} PPO POLICY EVALUATION")
     print("=" * 75)
@@ -58,14 +65,22 @@ def evaluate(
     print(f"Loading model:     {full_model_path}")
     print(f"Evaluation Mode:   {'Visual (Renderer ON)' if has_renderer else 'Headless'}")
     print(f"Episodes:          {episodes}")
-    print(f"Success Threshold: {SUCCESS_THRESHOLD * 100:.1f} cm")
+    if env_name == "grasp":
+        print("Success Criterion: robosuite _check_grasp (both fingerpads contact cube)")
+    else:
+        print(f"Success Threshold: {SUCCESS_THRESHOLD * 100:.1f} cm")
     print("-" * 75)
 
     # 1. Load trained policy
     model = PPO.load(full_model_path)
 
     # 2. Instantiate evaluation environment
-    if env_name == "object_reach":
+    if env_name == "grasp":
+        env = GraspEnv(
+            has_renderer=has_renderer,
+            max_episode_steps=150,
+        )
+    elif env_name == "object_reach":
         env = ObjectReachEnv(
             has_renderer=has_renderer,
             action_dim=3,
@@ -83,7 +98,7 @@ def evaluate(
     initial_distances = []
     episode_lengths = []
 
-    target_label = "Cube Position" if env_name == "object_reach" else "Target Position"
+    target_label = "Cube Position" if env_name in ("object_reach", "grasp") else "Target Position"
 
     try:
         for ep in range(1, episodes + 1):
@@ -118,19 +133,22 @@ def evaluate(
 
             final_eef = np.array(info["eef_position"], dtype=np.float32)
             final_dist = info["distance"]
-            success = info["success"]
+            success = info.get("success", False)
 
             final_distances.append(final_dist)
             episode_lengths.append(step_count)
             if success:
                 success_count += 1
-                status = ">>> SUCCESS <<<"
+                status = ">>> SUCCESS (GRASPED) <<<" if env_name == "grasp" else ">>> SUCCESS <<<"
             else:
-                status = "FAILED (Horizon Reached)"
+                status = "FAILED (Not Grasped)" if env_name == "grasp" else "FAILED (Horizon Reached)"
 
             print(f"  Steps Elapsed:     {step_count}")
             print(f"  Final EEF Pos:     [{final_eef[0]:+.4f}, {final_eef[1]:+.4f}, {final_eef[2]:+.4f}] m")
             print(f"  Final Distance:    {final_dist * 100:.2f} cm")
+            if env_name == "grasp":
+                print(f"  Contact Detected:  {info.get('has_contact', False)}")
+                print(f"  Grasp Detected:    {info.get('is_grasped', False)}")
             print(f"  Outcome:           {status}")
 
     finally:
@@ -157,8 +175,8 @@ def evaluate(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate trained PPO on UR5e ReachEnv or ObjectReachEnv.")
-    parser.add_argument("--env", type=str, default="reach", choices=["reach", "object_reach"], help="Environment to evaluate ('reach' or 'object_reach')")
+    parser = argparse.ArgumentParser(description="Evaluate trained PPO on UR5e ReachEnv, ObjectReachEnv, or GraspEnv.")
+    parser.add_argument("--env", type=str, default="reach", choices=["reach", "object_reach", "grasp"], help="Environment to evaluate ('reach', 'object_reach', or 'grasp')")
     parser.add_argument("--model-path", type=str, default=None, help="Path to trained PPO model (defaults based on --env)")
     parser.add_argument("--episodes", type=int, default=5, help="Number of evaluation episodes")
     parser.add_argument("--headless", action="store_true", help="Run without opening the MuJoCo render window")

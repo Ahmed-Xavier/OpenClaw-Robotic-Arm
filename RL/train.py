@@ -1,11 +1,9 @@
-"""train.py — Train PPO policy on UR5e ReachEnv using Stable-Baselines3.
+"""train.py — Train PPO policy on UR5e ReachEnv, ObjectReachEnv, or GraspEnv using Stable-Baselines3.
 
-Phase 1 Training Pipeline:
-1. Instantiates ReachEnv (Gymnasium wrapper around robosuite UR5e Lift).
-2. Wraps with Stable-Baselines3 Monitor for telemetry.
-3. Configures PPO (MlpPolicy, n_steps=1024, batch_size=64, lr=3e-4).
-4. Trains for specified timesteps (default 50,000).
-5. Saves trained weights to RL/models/ur5e_reach_ppo.zip.
+RL Training Pipeline:
+- Phase 1: ReachEnv (reach sampled 3D Cartesian points) -> RL/models/ur5e_reach_ppo.zip
+- Phase 1.5: ObjectReachEnv (reach actual physical cube) -> RL/models/ur5e_object_reach_ppo.zip
+- Phase 2: GraspEnv (grasp physical cube with gripper) -> RL/models/ur5e_grasp_ppo.zip
 """
 
 from __future__ import annotations
@@ -28,6 +26,7 @@ from stable_baselines3.common.monitor import Monitor
 
 from RL.envs.reach_env import ReachEnv, sanity_check as reach_sanity_check
 from RL.envs.object_reach_env import ObjectReachEnv, sanity_check as object_reach_sanity_check
+from RL.envs.grasp_env import GraspEnv, sanity_check as grasp_sanity_check
 
 
 
@@ -75,7 +74,12 @@ def train(
     if save_path is None:
         save_path = f"RL/models/ur5e_{env_name}_ppo"
 
-    phase_label = "PHASE 1.5: UR5e ObjectReachEnv" if env_name == "object_reach" else "PHASE 1: UR5e ReachEnv"
+    if env_name == "grasp":
+        phase_label = "PHASE 2: UR5e GraspEnv"
+    elif env_name == "object_reach":
+        phase_label = "PHASE 1.5: UR5e ObjectReachEnv"
+    else:
+        phase_label = "PHASE 1: UR5e ReachEnv"
     print("=" * 70)
     print(f"  {phase_label} PPO TRAINING PIPELINE")
     print("=" * 70)
@@ -89,14 +93,18 @@ def train(
 
     # 1. Run environment sanity check
     print("[1/4] Running environment sanity check...")
-    if env_name == "object_reach":
+    if env_name == "grasp":
+        grasp_sanity_check()
+    elif env_name == "object_reach":
         object_reach_sanity_check()
     else:
         reach_sanity_check()
 
     # 2. Instantiate and wrap training environment
     print("[2/4] Instantiating training environment...")
-    if env_name == "object_reach":
+    if env_name == "grasp":
+        raw_env = GraspEnv(has_renderer=False)
+    elif env_name == "object_reach":
         raw_env = ObjectReachEnv(has_renderer=False, action_dim=3)
     else:
         raw_env = ReachEnv(has_renderer=False, action_dim=3)
@@ -150,8 +158,8 @@ def train(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train PPO on UR5e ReachEnv or ObjectReachEnv.")
-    parser.add_argument("--env", type=str, default="reach", choices=["reach", "object_reach"], help="Environment to train ('reach' or 'object_reach')")
+    parser = argparse.ArgumentParser(description="Train PPO on UR5e ReachEnv, ObjectReachEnv, or GraspEnv.")
+    parser.add_argument("--env", type=str, default="reach", choices=["reach", "object_reach", "grasp"], help="Environment to train ('reach', 'object_reach', or 'grasp')")
     parser.add_argument("--timesteps", type=int, default=50_000, help="Total timesteps to train")
     parser.add_argument("--save-path", type=str, default=None, help="Path to save trained weights (defaults based on --env)")
     parser.add_argument("--n-steps", type=int, default=1024, help="PPO rollout buffer size")

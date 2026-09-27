@@ -154,6 +154,7 @@ class GraspEnv(gym.Env):
         obs = self._get_obs(raw_obs)
         info = {
             "distance": self.prev_distance,
+            "success": False,
             "is_grasped": False,
             "has_contact": False,
             "eef_position": initial_eef.tolist(),
@@ -226,6 +227,7 @@ class GraspEnv(gym.Env):
 
         info = {
             "distance": current_distance,
+            "success": is_grasped,
             "is_grasped": is_grasped,
             "has_contact": any_contact,
             "has_both_contact": both_contact,
