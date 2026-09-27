@@ -26,7 +26,9 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 
-from RL.envs.reach_env import ReachEnv, sanity_check
+from RL.envs.reach_env import ReachEnv, sanity_check as reach_sanity_check
+from RL.envs.object_reach_env import ObjectReachEnv, sanity_check as object_reach_sanity_check
+
 
 
 class TrainingProgressCallback(BaseCallback):
@@ -60,18 +62,24 @@ class TrainingProgressCallback(BaseCallback):
 
 
 def train(
+    env_name: str = "reach",
     timesteps: int = 50_000,
-    save_path: str = "RL/models/ur5e_reach_ppo",
+    save_path: Optional[str] = None,
     n_steps: int = 1024,
     batch_size: int = 64,
     learning_rate: float = 3e-4,
     seed: int = 42,
     device: str = "auto",
 ):
-    """Train PPO policy on UR5e ReachEnv."""
+    """Train PPO policy on UR5e ReachEnv or ObjectReachEnv."""
+    if save_path is None:
+        save_path = f"RL/models/ur5e_{env_name}_ppo"
+
+    phase_label = "PHASE 1.5: UR5e ObjectReachEnv" if env_name == "object_reach" else "PHASE 1: UR5e ReachEnv"
     print("=" * 70)
-    print("  PHASE 1: UR5e REAChenv PPO TRAINING PIPELINE")
+    print(f"  {phase_label} PPO TRAINING PIPELINE")
     print("=" * 70)
+    print(f"Environment:       {env_name}")
     print(f"Device:            {device} (CUDA available: {torch.cuda.is_available()})")
     print(f"Total Timesteps:   {timesteps}")
     print(f"Save Path:         {save_path}")
@@ -81,11 +89,17 @@ def train(
 
     # 1. Run environment sanity check
     print("[1/4] Running environment sanity check...")
-    sanity_check()
+    if env_name == "object_reach":
+        object_reach_sanity_check()
+    else:
+        reach_sanity_check()
 
     # 2. Instantiate and wrap training environment
     print("[2/4] Instantiating training environment...")
-    raw_env = ReachEnv(has_renderer=False, action_dim=3)
+    if env_name == "object_reach":
+        raw_env = ObjectReachEnv(has_renderer=False, action_dim=3)
+    else:
+        raw_env = ReachEnv(has_renderer=False, action_dim=3)
     env = Monitor(raw_env)
 
     # 3. Create Stable-Baselines3 PPO agent
@@ -136,9 +150,10 @@ def train(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train PPO on UR5e ReachEnv.")
+    parser = argparse.ArgumentParser(description="Train PPO on UR5e ReachEnv or ObjectReachEnv.")
+    parser.add_argument("--env", type=str, default="reach", choices=["reach", "object_reach"], help="Environment to train ('reach' or 'object_reach')")
     parser.add_argument("--timesteps", type=int, default=50_000, help="Total timesteps to train")
-    parser.add_argument("--save-path", type=str, default="RL/models/ur5e_reach_ppo", help="Path to save trained weights")
+    parser.add_argument("--save-path", type=str, default=None, help="Path to save trained weights (defaults based on --env)")
     parser.add_argument("--n-steps", type=int, default=1024, help="PPO rollout buffer size")
     parser.add_argument("--batch-size", type=int, default=64, help="PPO mini-batch size")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
@@ -148,6 +163,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     train(
+        env_name=args.env,
         timesteps=args.timesteps,
         save_path=args.save_path,
         n_steps=args.n_steps,
@@ -156,3 +172,4 @@ if __name__ == "__main__":
         seed=args.seed,
         device=args.device,
     )
+
