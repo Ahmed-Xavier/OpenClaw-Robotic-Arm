@@ -21,9 +21,14 @@ import robosuite as suite
 # Constants
 # ---------------------------------------------------------------------------
 
-GRASP_BONUS: float = 10.0       # Reward for successful grasp (both fingerpads contact cube)
-CONTACT_BONUS: float = 0.25     # Per-step reward for any finger-cube contact
+GRASP_BONUS: float = 10.0           # Reward for successful grasp (both fingerpads contact cube)
+CONTACT_BONUS: float = 0.50         # One-time reward for first finger-cube contact
 ACTION_PENALTY_COEF: float = 0.01
+PREMATURE_CLOSE_COEF: float = 0.005 # Soft penalty per step for closing gripper when far from cube (d > 0.08m)
+CLOSING_INCENTIVE_COEF: float = 0.05 # Dense closing incentive when close and well-aligned
+CLOSE_DISTANCE_THRESH: float = 0.035 # Max distance to receive closing incentive (3.5 cm)
+CLOSE_XY_THRESH: float = 0.025      # Max horizontal offset to receive closing incentive (2.5 cm)
+TRANSLATION_SCALE: float = 0.2      # Scales [-1, 1] to max +/- 1 cm (0.2 * 0.05m = 0.01m)
 
 
 class GraspEnv(gym.Env):
@@ -86,6 +91,7 @@ class GraspEnv(gym.Env):
         # Episode state variables
         self.prev_distance: float = 0.0
         self.step_count: int = 0
+        self.contact_reward_given: bool = False
 
     def _get_obs(self, raw_obs: Dict[str, Any]) -> np.ndarray:
         """Extract compact 10D observation vector.
@@ -140,6 +146,7 @@ class GraspEnv(gym.Env):
         """Reset robosuite simulation and return initial observation."""
         super().reset(seed=seed)
         self.step_count = 0
+        self.contact_reward_given = False
 
         # Reset underlying robosuite Lift environment
         raw_obs = self.env.reset()
@@ -157,6 +164,8 @@ class GraspEnv(gym.Env):
             "success": False,
             "is_grasped": False,
             "has_contact": False,
+            "contact_reward_given": False,
+            "gripper_state": float(obs[9]),
             "eef_position": initial_eef.tolist(),
             "cube_position": cube_pos.tolist(),
         }
@@ -176,8 +185,10 @@ class GraspEnv(gym.Env):
 
         # Construct full 7D robosuite action:
         # [dx, dy, dz, droll, dpitch, dyaw, gripper]
+        # Translation scaled by TRANSLATION_SCALE (0.2) so [-1, 1] commands at most +/- 1 cm
+        # (since robosuite OSC maps [-1, 1] to [-0.05, +0.05] m, 0.2 * 0.05 = 0.01 m = 1 cm).
         full_action = np.zeros(7, dtype=np.float32)
-        full_action[:3] = np.clip(act[:3], -1.0, 1.0)   # translation
+        full_action[:3] = np.clip(act[:3], -1.0, 1.0) * TRANSLATION_SCALE
         full_action[3:6] = 0.0                            # neutral orientation delta
         full_action[6] = np.clip(act[3], -1.0, 1.0)      # gripper: -1=open, +1=close
 
@@ -190,7 +201,8 @@ class GraspEnv(gym.Env):
         current_distance = float(np.linalg.norm(cube_pos - eef_pos))
 
         # ---------------------------------------------------------------
-        # Reward formulation
+        # Reward formulation (Phase 2.2)
+        # APPROACH -> ALIGN -> CLOSE -> CONTACT -> GRASP
         # ---------------------------------------------------------------
 
         # 1. Distance improvement (potential-based shaping, same as Phase 1.5)
@@ -199,17 +211,61 @@ class GraspEnv(gym.Env):
         # 2. Continuous distance penalty (encourages reaching quickly)
         proximity_penalty = -current_distance * 0.1
 
-        # 3. Action smoothness penalty (translation only, not gripper)
-        action_penalty = -ACTION_PENALTY_COEF * float(np.sum(np.square(full_action[:3])))
+        # 3. Action smoothness penalty (policy translation action output)
+        action_penalty = -ACTION_PENALTY_COEF * float(np.sum(np.square(np.clip(act[:3], -1.0, 1.0))))
 
-        reward = dist_improvement + proximity_penalty + action_penalty
+        # 4. Soft premature-close penalty (redesigned from Phase 2.1).
+        #    Applied only when d > 0.08 m (clearly outside grasping range) with a very
+        #    small coefficient (0.005, 10x smaller than Phase 2.1) that scales linearly
+        #    with distance so it vanishes smoothly as the arm approaches the cube.
+        #    This discourages persistent closing during transit without freezing the
+        #    policy's gripper channel at -1 throughout training.
+        early_close_penalty = 0.0
+        if current_distance > 0.08 and act[3] > 0.0:
+            # Scale: 0.0 at d=0.08m -> max PREMATURE_CLOSE_COEF at d=0.23m and beyond
+            far_factor = min(1.0, (current_distance - 0.08) / 0.15)
+            early_close_penalty = -PREMATURE_CLOSE_COEF * float(act[3]) * far_factor
 
-        # 4. Finger contact bonus (any finger geom touching cube)
+        # 5. Dense closing incentive (fixes the chicken-and-egg problem).
+        #    Active ONLY when:
+        #      (a) EEF is within CLOSE_DISTANCE_THRESH (3.5 cm) of the cube, AND
+        #      (b) horizontal XY alignment is within CLOSE_XY_THRESH (2.5 cm) —
+        #          the cube is centred between the fingers, not to the side, AND
+        #      (c) the gripper closing is commanded (act[3] > 0), AND
+        #      (d) the gripper is not already saturated fully closed WITHOUT contact
+        #          (prevents the policy from farming reward by staying clamped shut in air)
+        #    Reward scales with gripper command magnitude and with alignment quality,
+        #    so a perfectly centred, strong close commands earns the maximum incentive.
+        delta = cube_pos - eef_pos
+        d_xy = float(np.sqrt(delta[0] ** 2 + delta[1] ** 2))
+
         any_contact, both_contact = self._has_any_contact()
-        if any_contact:
-            reward += CONTACT_BONUS
 
-        # 5. Grasp success check (strict: both fingerpads must contact simultaneously)
+        closing_incentive = 0.0
+        if (
+            current_distance <= CLOSE_DISTANCE_THRESH
+            and d_xy <= CLOSE_XY_THRESH
+            and act[3] > 0.0
+        ):
+            # Gripper qpos from observation: obs[9]. Fully open ~ -0.05, fully closed ~ 0.41.
+            gripper_qpos = float(raw_obs["robot0_gripper_qpos"][0])
+            # Allow incentive if: gripper not already fully clamped shut without contact,
+            # OR contact has been made (keep incentive active so policy finishes closing).
+            already_clamped_no_contact = (gripper_qpos > 0.35) and (not any_contact)
+            if not already_clamped_no_contact:
+                dist_factor = 1.0 - current_distance / CLOSE_DISTANCE_THRESH   # 0→1 as d→0
+                xy_factor = 1.0 - d_xy / CLOSE_XY_THRESH                       # 0→1 as d_xy→0
+                align_factor = dist_factor * xy_factor                          # joint quality gate
+                closing_incentive = CLOSING_INCENTIVE_COEF * float(act[3]) * align_factor
+
+        reward = dist_improvement + proximity_penalty + action_penalty + early_close_penalty + closing_incentive
+
+        # 6. One-time contact bonus (first meaningful finger contact: +0.50, subsequent: +0.0)
+        if any_contact and not self.contact_reward_given:
+            reward += CONTACT_BONUS
+            self.contact_reward_given = True
+
+        # 6. Grasp success check (strict: both fingerpads must contact simultaneously)
         is_grasped = self._is_grasped()
         if is_grasped:
             reward += GRASP_BONUS
@@ -231,6 +287,8 @@ class GraspEnv(gym.Env):
             "is_grasped": is_grasped,
             "has_contact": any_contact,
             "has_both_contact": both_contact,
+            "contact_reward_given": self.contact_reward_given,
+            "gripper_state": float(obs[9]),
             "eef_position": eef_pos.tolist(),
             "cube_position": cube_pos.tolist(),
         }
