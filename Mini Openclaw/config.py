@@ -28,6 +28,12 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:4b").strip()
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "60"))
 
+# OpenCode CLI agent (selectable as "opencode:army" in the launcher /model wizard)
+OPENCODE_BIN = os.getenv("OPENCODE_BIN", "opencode").strip() or "opencode"
+OPENCODE_AGENT = os.getenv("OPENCODE_AGENT", "army").strip() or "army"
+# A pick can take 30-40 s; allow long multi-tool agent turns.
+OPENCODE_TIMEOUT_SECONDS = int(os.getenv("OPENCODE_TIMEOUT_SECONDS", "300"))
+
 # Robot Arm Flask REST Server URL
 # Default local 127.0.0.1:8765, or e.g. http://172.21.96.1:8765
 FLASK_URL = os.getenv("FLASK_URL", "http://127.0.0.1:8765").rstrip("/")

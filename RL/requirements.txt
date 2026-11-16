@@ -1,0 +1,5 @@
+mujoco==3.3.1
+robosuite==1.5.2
+gymnasium
+stable-baselines3
+torch

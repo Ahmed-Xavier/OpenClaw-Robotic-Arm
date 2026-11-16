@@ -425,6 +425,7 @@ def test_startup_still_starts_telegram_when_ollama_start_fails(capsys):
 
     with patch.object(sm, "ollama_reachable", return_value=False), \
          patch.object(sm, "start_ollama_server", return_value=(False, "Ollama unavailable")), \
+         patch.object(sm, "start_flask", return_value=(True, "OK")), \
          patch.object(sm, "start_bot", return_value=(
              True, "OK (@testbot)", {"category": "OK", "bot_info": {"username": "testbot"}}
          )) as start_bot:
@@ -432,6 +433,24 @@ def test_startup_still_starts_telegram_when_ollama_start_fails(capsys):
 
     start_bot.assert_called_once()
     assert "Connecting Telegram" in capsys.readouterr().out
+
+def test_startup_starts_flask_when_ollama_ping_fails(capsys):
+    """Flask must start even when an Ollama validation step fails; return stays False."""
+    bus = EventBus()
+    sm = ServiceManager(bus)
+
+    with patch.object(sm, "ollama_reachable", return_value=True), \
+         patch.object(sm, "ollama_model_exists", return_value=(True, "OK")), \
+         patch.object(sm, "ping_model", return_value=(False, "inference timed out")), \
+         patch.object(sm, "start_flask", return_value=(True, "OK")) as start_flask, \
+         patch.object(sm, "start_bot", return_value=(
+             True, "disabled", {"category": "NO_TOKEN", "bot_info": {}}
+         )):
+        assert run_startup(sm) is False
+
+    start_flask.assert_called_once()
+    assert "Starting Flask / MuJoCo" in capsys.readouterr().out
+
 
 def test_telegram_check_dns_failure():
     """Verify that DNS failure is classified specifically without testing bot token."""

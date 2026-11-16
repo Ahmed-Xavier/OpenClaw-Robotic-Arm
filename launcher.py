@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -72,8 +73,10 @@ from config import (                   # noqa: E402
     MAX_TOOL_CALLS_PER_TURN,
     OLLAMA_MODEL,
     OLLAMA_URL,
+    OPENCODE_BIN,
     TELEGRAM_BOT_TOKEN,
 )
+from opencode_agent import OpenCodeAgent, resolve_opencode_cmd  # noqa: E402
 
 _LOG_DIR = _ROOT / "logs"
 _SERVER_LOG = _LOG_DIR / "server.log"
@@ -84,6 +87,9 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("launcher")
+
+# Pseudo-model that routes messages through the OpenCode CLI agent.
+OPENCODE_MODEL_NAME = "opencode:army"
 
 # ---------------------------------------------------------------------------
 # Event system
@@ -359,6 +365,8 @@ class ServiceManager:
     # ------------------------------------------------------------------
 
     def _create_agent(self) -> RobotArmAgent:
+        if self._current_model == OPENCODE_MODEL_NAME:
+            return OpenCodeAgent()
         return RobotArmAgent(ollama_model=self._current_model)
 
     # ------------------------------------------------------------------
@@ -871,7 +879,10 @@ class TerminalConsole:
         print("  Agent:")
         print(f"    Name:   Army")
         print(f"    State:  {'BUSY' if sm.is_robot_busy() else 'READY'}")
-        print(f"    Model:  ollama/{sm.current_model}")
+        if sm.current_model == OPENCODE_MODEL_NAME:
+            print("    Model:  opencode (army)")
+        else:
+            print(f"    Model:  ollama/{sm.current_model}")
         print()
 
         print("  Robot:")
@@ -905,12 +916,13 @@ class TerminalConsole:
         else:
             tg_str = "DISCONNECTED"
         print(f"    Telegram:   {tg_str}")
-        try:
-            requests.get(f"{OLLAMA_URL}/api/tags", timeout=3).raise_for_status()
-            ollama_ok = True
-        except Exception:
-            ollama_ok = False
-        print(f"    Ollama:     {'CONNECTED' if ollama_ok else 'UNREACHABLE'}  ({OLLAMA_URL})")
+        if sm.current_model != OPENCODE_MODEL_NAME:
+            try:
+                requests.get(f"{OLLAMA_URL}/api/tags", timeout=3).raise_for_status()
+                ollama_ok = True
+            except Exception:
+                ollama_ok = False
+            print(f"    Ollama:     {'CONNECTED' if ollama_ok else 'UNREACHABLE'}  ({OLLAMA_URL})")
         print()
 
         print("  Limits:")
@@ -974,22 +986,37 @@ class TerminalConsole:
     def _cmd_model(self, arg: Optional[str]) -> None:
         sm = self._service
         current = sm.current_model
+        try:
+            resolve_opencode_cmd()
+            opencode_available = True
+        except FileNotFoundError:
+            opencode_available = False
 
         if arg is None:
             # Display mode: list and optionally prompt for change
             print()
-            print(f"  Current model:  ollama/{current}")
+            if current == OPENCODE_MODEL_NAME:
+                print(f"  Current model:  {OPENCODE_MODEL_NAME}")
+            else:
+                print(f"  Current model:  ollama/{current}")
             print()
             models = sm.list_ollama_models()
             if models:
                 print("  Available models:")
                 for m in models:
                     marker = "*" if (
-                        m == current or m.split(":")[0] == current.split(":")[0]
+                        current != OPENCODE_MODEL_NAME
+                        and (
+                            m == current
+                            or m.split(":")[0] == current.split(":")[0]
+                        )
                     ) else " "
                     print(f"    [{marker}] {m}")
             else:
                 print("  (Could not list models — Ollama may be unreachable)")
+            if opencode_available:
+                marker = "*" if current == OPENCODE_MODEL_NAME else " "
+                print(f"    [{marker}] {OPENCODE_MODEL_NAME}")
             print()
             try:
                 new_name = input("  New model (Enter to keep current): ").strip()
@@ -1004,29 +1031,59 @@ class TerminalConsole:
         # Atomic validation pipeline (plan §9)
         print(f"\n  Validating model '{arg}'...")
 
-        # Step 1: check existence
-        models = sm.list_ollama_models()
-        if models:  # skip existence check if we can't list (Ollama may be unreachable)
-            found = any(
-                m == arg or m.split(":")[0] == arg.split(":")[0]
-                for m in models
-            )
-            if not found:
-                print(f"  Model '{arg}' not found in Ollama.")
-                if models:
-                    print(f"  Available: {', '.join(models)}")
+        if arg == OPENCODE_MODEL_NAME:
+            # OpenCode is not an Ollama model: no existence check, no ping.
+            try:
+                opencode_cmd = resolve_opencode_cmd()
+            except FileNotFoundError as exc:
+                print(f"  Model change rejected: {exc}")
+                print(f"  Current model unchanged: {current}")
+                return
+            try:
+                version = subprocess.run(
+                    [opencode_cmd, "--version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    shell=False,
+                )
+            except FileNotFoundError:
+                print(f"  Model change rejected: opencode binary '{opencode_cmd}' not found on PATH.")
+                print(f"  Current model unchanged: {current}")
+                return
+            except Exception as exc:
+                print(f"  Model change rejected: could not run opencode: {exc}")
+                print(f"  Current model unchanged: {current}")
+                return
+            if version.returncode != 0:
+                detail = (version.stderr or version.stdout or "").strip()
+                print(f"  Model change rejected: opencode --version failed: {detail}")
+                print(f"  Current model unchanged: {current}")
+                return
+        else:
+            # Step 1: check existence
+            models = sm.list_ollama_models()
+            if models:  # skip existence check if we can't list (Ollama may be unreachable)
+                found = any(
+                    m == arg or m.split(":")[0] == arg.split(":")[0]
+                    for m in models
+                )
+                if not found:
+                    print(f"  Model '{arg}' not found in Ollama.")
+                    if models:
+                        print(f"  Available: {', '.join(models)}")
+                    print(f"  Current model unchanged: {current}")
+                    return
+
+            # Step 2: inference ping
+            print("  Pinging model (may take a moment)...")
+            ok, reason = sm.ping_model(arg)
+            if not ok:
+                print(f"  Model change rejected: {reason}")
                 print(f"  Current model unchanged: {current}")
                 return
 
-        # Step 2: inference ping
-        print("  Pinging model (may take a moment)...")
-        ok, reason = sm.ping_model(arg)
-        if not ok:
-            print(f"  Model change rejected: {reason}")
-            print(f"  Current model unchanged: {current}")
-            return
-
-        # Step 3: apply atomically — only reached if both checks passed
+        # Step 3: apply atomically — only reached if validation passed
         print(f"  Restarting agent with model '{arg}'...")
         sm.set_model(arg)
         print(f"  Model changed: {current} → {arg}")
@@ -1139,49 +1196,61 @@ def _print_banner() -> None:
 def run_startup(service: ServiceManager) -> bool:
     """Run the ordered startup sequence with aligned status display.
 
-    Returns True if all critical services came up (agent + Flask).
-    Telegram failure is non-fatal — terminal still works.
+    Flask/MuJoCo and Telegram are started even when an Ollama check fails, so
+    the terminal and robot API remain usable.  Returns False if any critical
+    dependency (Ollama or Flask) failed, matching the previous contract.
     """
     _print_banner()
+    startup_ok = True
 
-    # ---- Ollama: reachability ----
-    _step("Checking Ollama...")
-    if service.ollama_reachable():
-        _ok()
+    if service.current_model == OPENCODE_MODEL_NAME:
+        # OpenCode owns the model runtime: skip all Ollama checks.
+        _step("Model opencode (army)...")
+        try:
+            resolve_opencode_cmd()
+            _ok()
+        except FileNotFoundError as exc:
+            print(f"selected ({exc})")
     else:
-        print("not running")
-        _step("  Starting Ollama server...")
-        ok, msg = service.start_ollama_server()
-        if ok:
+        # ---- Ollama: reachability ----
+        _step("Checking Ollama...")
+        ollama_ready = service.ollama_reachable()
+        if ollama_ready:
             _ok()
         else:
-            _fail(msg)
-            _start_telegram_nonfatal(service)
-            return False
+            print("not running")
+            _step("  Starting Ollama server...")
+            ok, msg = service.start_ollama_server()
+            if ok:
+                _ok()
+                ollama_ready = True
+            else:
+                _fail(msg)
+                startup_ok = False
 
-    # ---- Ollama: model existence ----
-    _step(f"Model {service.current_model}...")
-    ok, msg = service.ollama_model_exists()
-    if ok:
-        _ok()
-    else:
-        _fail(msg)
-        _start_telegram_nonfatal(service)
-        return False
+        if ollama_ready:
+            # ---- Ollama: model existence ----
+            _step(f"Model {service.current_model}...")
+            ok, msg = service.ollama_model_exists()
+            if ok:
+                _ok()
+            else:
+                _fail(msg)
+                startup_ok = False
 
-    # ---- Ollama: inference validation ----
-    _step("Validating model response...")
-    t0 = time.time()
-    ok, reason = service.ping_model()
-    elapsed = time.time() - t0
-    if ok:
-        _ok(f"{elapsed:.1f}s")
-    else:
-        _fail(reason)
-        _start_telegram_nonfatal(service)
-        return False
+            # ---- Ollama: inference validation ----
+            if ok:
+                _step("Validating model response...")
+                t0 = time.time()
+                ok, reason = service.ping_model()
+                elapsed = time.time() - t0
+                if ok:
+                    _ok(f"{elapsed:.1f}s")
+                else:
+                    _fail(reason)
+                    startup_ok = False
 
-    # ---- Flask / MuJoCo ----
+    # ---- Flask / MuJoCo (always attempted) ----
     _step("Starting Flask / MuJoCo...")
     t0 = time.time()
     ok, msg = service.start_flask()
@@ -1191,8 +1260,7 @@ def run_startup(service: ServiceManager) -> bool:
     else:
         _fail(msg)
         print("  Check logs/server.log for details.")
-        _start_telegram_nonfatal(service)
-        return False
+        startup_ok = False
 
     # ---- Telegram bot (non-fatal) ----
     _step("Connecting Telegram...")
@@ -1220,6 +1288,9 @@ def run_startup(service: ServiceManager) -> bool:
         print("  Terminal still available. Telegram is inactive.")
         if service.agent is None:
             service._agent = service._create_agent()
+
+    if not startup_ok:
+        return False
 
     # ---- Ready ----
     if service.telegram_connected:

@@ -21,14 +21,16 @@ import robosuite as suite
 # Constants
 # ---------------------------------------------------------------------------
 
-GRASP_BONUS: float = 10.0           # Reward for successful grasp (both fingerpads contact cube)
-CONTACT_BONUS: float = 0.50         # One-time reward for first finger-cube contact
+GRASP_BONUS: float = 10.0             # Reward for successful grasp (both fingerpads contact cube)
+CONTACT_BONUS: float = 0.25           # One-time reward for first any-finger contact with cube
+BOTH_PAD_CONTACT_BONUS: float = 0.50  # Per-step reward when BOTH fingerpads simultaneously contact cube
+ONE_SIDED_CONTACT_PENALTY: float = 0.10 # Per-step penalty when only one pad contacts (cube being pushed)
 ACTION_PENALTY_COEF: float = 0.01
-PREMATURE_CLOSE_COEF: float = 0.005 # Soft penalty per step for closing gripper when far from cube (d > 0.08m)
-CLOSING_INCENTIVE_COEF: float = 0.05 # Dense closing incentive when close and well-aligned
-CLOSE_DISTANCE_THRESH: float = 0.035 # Max distance to receive closing incentive (3.5 cm)
-CLOSE_XY_THRESH: float = 0.025      # Max horizontal offset to receive closing incentive (2.5 cm)
-TRANSLATION_SCALE: float = 0.2      # Scales [-1, 1] to max +/- 1 cm (0.2 * 0.05m = 0.01m)
+TIME_PENALTY_COEF: float = 0.001      # Tiny per-step time cost
+PREMATURE_CLOSE_COEF: float = 0.005   # Soft penalty for closing when d > 0.08m
+# NOTE: No CLOSING_INCENTIVE in Phase 2.5 — BC warm-start handles when-to-close;
+#       adding dense closing incentive consistently caused reward hacking across 2.3/2.4.
+TRANSLATION_SCALE: float = 0.2        # Scales [-1, 1] to max +/- 1 cm (0.2 * 0.05m = 0.01m)
 
 
 class GraspEnv(gym.Env):
@@ -117,17 +119,23 @@ class GraspEnv(gym.Env):
         Returns:
             (any_contact, both_sides_contact):
                 any_contact: True if any finger geom (left or right) touches cube
-                both_sides_contact: True if both left AND right finger groups touch cube
+                both_sides_contact: True if both left AND right fingerpads touch cube (matching _check_grasp)
         """
         robot = self.env.robots[0]
         gr = robot.gripper["right"]
-        left_contact = self.env.check_contact(
+        left_finger = self.env.check_contact(
             gr.important_geoms["left_finger"], self.env.cube
         )
-        right_contact = self.env.check_contact(
+        right_finger = self.env.check_contact(
             gr.important_geoms["right_finger"], self.env.cube
         )
-        return (left_contact or right_contact), (left_contact and right_contact)
+        left_pad = self.env.check_contact(
+            gr.important_geoms["left_fingerpad"], self.env.cube
+        )
+        right_pad = self.env.check_contact(
+            gr.important_geoms["right_fingerpad"], self.env.cube
+        )
+        return (left_finger or right_finger), (left_pad and right_pad)
 
     def _is_grasped(self) -> bool:
         """Check robosuite's strict grasp criterion.
@@ -147,6 +155,13 @@ class GraspEnv(gym.Env):
         super().reset(seed=seed)
         self.step_count = 0
         self.contact_reward_given = False
+
+        if seed is not None:
+            if hasattr(self.env, "placement_initializer") and self.env.placement_initializer is not None:
+                self.env.placement_initializer.rng = np.random.default_rng(seed)
+            if hasattr(self.env, "rng"):
+                self.env.rng = np.random.default_rng(seed)
+            np.random.seed(seed)
 
         # Reset underlying robosuite Lift environment
         raw_obs = self.env.reset()
@@ -201,71 +216,54 @@ class GraspEnv(gym.Env):
         current_distance = float(np.linalg.norm(cube_pos - eef_pos))
 
         # ---------------------------------------------------------------
-        # Reward formulation (Phase 2.2)
+        # Reward formulation (Phase 2.5)
         # APPROACH -> ALIGN -> CLOSE -> CONTACT -> GRASP
+        #
+        # Key change from 2.4: REMOVED closing incentive entirely.
+        # Rationale: dense closing incentive caused reward hacking in both
+        # 2.3 (spam-close with no XY gate) and 2.4 (paralysis WITH XY gate).
+        # BC warm-start already initialises the policy to close at the right
+        # moment; PPO only needs to refine approach accuracy and contact quality.
+        # ONE_SIDED_CONTACT_PENALTY keeps the policy from pushing the cube.
         # ---------------------------------------------------------------
 
-        # 1. Distance improvement (potential-based shaping, same as Phase 1.5)
+        # 1. Distance improvement (potential-based shaping)
         dist_improvement = (self.prev_distance - current_distance) * 10.0
 
-        # 2. Continuous distance penalty (encourages reaching quickly)
+        # 2. Continuous distance penalty
         proximity_penalty = -current_distance * 0.1
 
-        # 3. Action smoothness penalty (policy translation action output)
+        # 3. Action smoothness penalty
         action_penalty = -ACTION_PENALTY_COEF * float(np.sum(np.square(np.clip(act[:3], -1.0, 1.0))))
 
-        # 4. Soft premature-close penalty (redesigned from Phase 2.1).
-        #    Applied only when d > 0.08 m (clearly outside grasping range) with a very
-        #    small coefficient (0.005, 10x smaller than Phase 2.1) that scales linearly
-        #    with distance so it vanishes smoothly as the arm approaches the cube.
-        #    This discourages persistent closing during transit without freezing the
-        #    policy's gripper channel at -1 throughout training.
+        # 4. Per-step time cost
+        time_penalty = -TIME_PENALTY_COEF
+
+        # 5. Soft premature-close penalty (d > 0.08 m)
         early_close_penalty = 0.0
         if current_distance > 0.08 and act[3] > 0.0:
-            # Scale: 0.0 at d=0.08m -> max PREMATURE_CLOSE_COEF at d=0.23m and beyond
             far_factor = min(1.0, (current_distance - 0.08) / 0.15)
             early_close_penalty = -PREMATURE_CLOSE_COEF * float(act[3]) * far_factor
 
-        # 5. Dense closing incentive (fixes the chicken-and-egg problem).
-        #    Active ONLY when:
-        #      (a) EEF is within CLOSE_DISTANCE_THRESH (3.5 cm) of the cube, AND
-        #      (b) horizontal XY alignment is within CLOSE_XY_THRESH (2.5 cm) —
-        #          the cube is centred between the fingers, not to the side, AND
-        #      (c) the gripper closing is commanded (act[3] > 0), AND
-        #      (d) the gripper is not already saturated fully closed WITHOUT contact
-        #          (prevents the policy from farming reward by staying clamped shut in air)
-        #    Reward scales with gripper command magnitude and with alignment quality,
-        #    so a perfectly centred, strong close commands earns the maximum incentive.
-        delta = cube_pos - eef_pos
-        d_xy = float(np.sqrt(delta[0] ** 2 + delta[1] ** 2))
-
         any_contact, both_contact = self._has_any_contact()
 
-        closing_incentive = 0.0
-        if (
-            current_distance <= CLOSE_DISTANCE_THRESH
-            and d_xy <= CLOSE_XY_THRESH
-            and act[3] > 0.0
-        ):
-            # Gripper qpos from observation: obs[9]. Fully open ~ -0.05, fully closed ~ 0.41.
-            gripper_qpos = float(raw_obs["robot0_gripper_qpos"][0])
-            # Allow incentive if: gripper not already fully clamped shut without contact,
-            # OR contact has been made (keep incentive active so policy finishes closing).
-            already_clamped_no_contact = (gripper_qpos > 0.35) and (not any_contact)
-            if not already_clamped_no_contact:
-                dist_factor = 1.0 - current_distance / CLOSE_DISTANCE_THRESH   # 0→1 as d→0
-                xy_factor = 1.0 - d_xy / CLOSE_XY_THRESH                       # 0→1 as d_xy→0
-                align_factor = dist_factor * xy_factor                          # joint quality gate
-                closing_incentive = CLOSING_INCENTIVE_COEF * float(act[3]) * align_factor
+        reward = (dist_improvement + proximity_penalty + action_penalty
+                  + time_penalty + early_close_penalty)
 
-        reward = dist_improvement + proximity_penalty + action_penalty + early_close_penalty + closing_incentive
-
-        # 6. One-time contact bonus (first meaningful finger contact: +0.50, subsequent: +0.0)
+        # 7. One-time contact bonus (first any-finger contact: +CONTACT_BONUS)
         if any_contact and not self.contact_reward_given:
             reward += CONTACT_BONUS
             self.contact_reward_given = True
 
-        # 6. Grasp success check (strict: both fingerpads must contact simultaneously)
+        # 8a. Per-step both-fingerpad contact bonus (reward bilateral squeeze)
+        if both_contact:
+            reward += BOTH_PAD_CONTACT_BONUS
+        # 8b. One-sided contact penalty (any-contact but NOT both-pad = cube being pushed).
+        #     This directly discourages the close-spam failure mode observed in Phase 2.3.
+        elif any_contact and not both_contact:
+            reward -= ONE_SIDED_CONTACT_PENALTY
+
+        # 9. Grasp success check (strict: both fingerpads must contact simultaneously)
         is_grasped = self._is_grasped()
         if is_grasped:
             reward += GRASP_BONUS

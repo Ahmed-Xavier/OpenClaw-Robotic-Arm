@@ -183,3 +183,6 @@ mjmodel.xml
 *.jsonl
 
 logs/
+
+# OpenCode CLI session memory (per-chat session ids)
+Mini Openclaw/opencode_sessions.json
