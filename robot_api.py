@@ -242,14 +242,16 @@ class RobotAPI:
                 self.data.ctrl[:] = (1 - alpha) * start_ctrl + alpha * target_ctrl
                 self._step_simulation()
 
-                if self._render and s % 2 == 0:
-                    self._sync()
+                if self._realtime and s % 2 == 0:
+                    if self._render:
+                        self._sync()
                     time.sleep(dt * 1.2)
 
             for s in range(settle_steps):
                 self._step_simulation()
-                if self._render and s % 3 == 0:
-                    self._sync()
+                if self._realtime and s % 3 == 0:
+                    if self._render:
+                        self._sync()
                     time.sleep(dt * 1.2)
         finally:
             self._busy_moving = False
@@ -752,8 +754,9 @@ class RobotAPI:
             dt = self.model.opt.timestep
             for s in range(settle_steps):
                 self._step_simulation()
-                if self._render and s % 3 == 0:
-                    self._sync()
+                if self._realtime and s % 3 == 0:
+                    if self._render:
+                        self._sync()
                     time.sleep(dt * 1.5)
         finally:
             self._busy_moving = False
@@ -770,8 +773,9 @@ class RobotAPI:
             dt = self.model.opt.timestep
             for s in range(dwell_steps):
                 self._step_simulation()
-                if self._render and s % 3 == 0:
-                    self._sync()
+                if self._realtime and s % 3 == 0:
+                    if self._render:
+                        self._sync()
                     time.sleep(dt)
         finally:
             self._busy_moving = False
