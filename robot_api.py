@@ -83,6 +83,7 @@ class RobotAPI:
         self.model = mujoco.MjModel.from_xml_path(_MODEL_PATH)
         self.data = mujoco.MjData(self.model)
         self._ik_data = mujoco.MjData(self.model)
+        self._data_lock = threading.RLock()
 
         self._site_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_SITE, "grasp_site"
@@ -131,7 +132,7 @@ class RobotAPI:
 
         # Settle simulation
         for _ in range(50):
-            mujoco.mj_step(self.model, self.data)
+            self._step_simulation()
 
         self._holding = False
         self._held_object = None
@@ -148,9 +149,12 @@ class RobotAPI:
         if self._render:
             self._viewer = mujoco.viewer.launch_passive(self.model, self.data)
             self._sync()
-            # Background keep-alive loop: viewer stays responsive for Ctrl+Click perturbations
-            self._sim_thread = threading.Thread(target=self._keep_alive_loop, daemon=True)
-            self._sim_thread.start()
+
+        # Physics runs independently of the optional interactive viewer.
+        self._sim_thread = threading.Thread(
+            target=self._keep_alive_loop, name="army-mujoco-physics", daemon=True
+        )
+        self._sim_thread.start()
 
         print("[robot_api] SO-100 arm initialized and ready.")
 
@@ -162,14 +166,20 @@ class RobotAPI:
         if self._viewer is not None and self._viewer.is_running():
             self._viewer.sync()
 
+    def _step_simulation(self):
+        """Advance shared MuJoCo state under the lock used by telemetry/rendering."""
+        with self._data_lock:
+            mujoco.mj_step(self.model, self.data)
+
     def _keep_alive_loop(self):
-        """Continuously steps physics and syncs viewer when the arm is idle,
-        allowing real-time mouse dragging (Ctrl + Right-Click) and physics interactions."""
-        dt = self.model.opt.timestep
+        """Advance idle physics whether or not the interactive viewer is enabled."""
+        dt = float(self.model.opt.timestep)
         while self._running:
-            if not self._busy_moving and self._viewer is not None and self._viewer.is_running():
-                mujoco.mj_step(self.model, self.data)
-                self._sync()
+            viewer_ok = self._viewer is None or self._viewer.is_running()
+            if not self._busy_moving and viewer_ok:
+                self._step_simulation()
+                if self._viewer is not None:
+                    self._sync()
                 time.sleep(dt)
             else:
                 time.sleep(0.01)
@@ -226,14 +236,14 @@ class RobotAPI:
             for s in range(steps):
                 alpha = (s + 1) / steps
                 self.data.ctrl[:] = (1 - alpha) * start_ctrl + alpha * target_ctrl
-                mujoco.mj_step(self.model, self.data)
+                self._step_simulation()
 
                 if self._render and s % 2 == 0:
                     self._sync()
                     time.sleep(dt * 1.2)
 
             for s in range(settle_steps):
-                mujoco.mj_step(self.model, self.data)
+                self._step_simulation()
                 if self._render and s % 3 == 0:
                     self._sync()
                     time.sleep(dt * 1.2)
@@ -737,7 +747,7 @@ class RobotAPI:
             settle_steps = 120
             dt = self.model.opt.timestep
             for s in range(settle_steps):
-                mujoco.mj_step(self.model, self.data)
+                self._step_simulation()
                 if self._render and s % 3 == 0:
                     self._sync()
                     time.sleep(dt * 1.5)
@@ -755,7 +765,7 @@ class RobotAPI:
             dwell_steps = int(0.5 / self.model.opt.timestep)
             dt = self.model.opt.timestep
             for s in range(dwell_steps):
-                mujoco.mj_step(self.model, self.data)
+                self._step_simulation()
                 if self._render and s % 3 == 0:
                     self._sync()
                     time.sleep(dt)
@@ -882,9 +892,14 @@ class RobotAPI:
         return skills.run_scenario(self, name=name, target=target)
 
     def close(self):
+        """Stop background physics and release MuJoCo rendering resources."""
         self._running = False
+        if hasattr(self, "_sim_thread") and self._sim_thread.is_alive():
+            self._sim_thread.join(timeout=1.0)
         if self._viewer is not None:
             self._viewer.close()
+        if getattr(self, "_renderer", None) is not None:
+            self._renderer.close()
 
 
 # ------------------------------------------------------------------ #
