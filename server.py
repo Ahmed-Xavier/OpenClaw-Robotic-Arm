@@ -39,10 +39,13 @@ from flask import Flask, jsonify, request
 
 from robot_api import RobotAPI
 
+# Headless is the default; set ARMY_RENDER=1 to restore the MuJoCo viewer.
+RENDER_GUI = os.getenv("ARMY_RENDER", "0").strip().lower() in {"1", "true", "yes"}
+
 # ---------------------------------------------------------------------------
 # Global robot instance — created exactly once at startup, never per-request.
 # ---------------------------------------------------------------------------
-robot = RobotAPI(render=True)
+robot = RobotAPI(render=RENDER_GUI)
 
 app = Flask(__name__)
 
@@ -249,15 +252,30 @@ def scenario():
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    foxglove_bridge = None
+    if os.getenv("ARMY_FOXGLOVE", "1").strip().lower() in {"1", "true", "yes"}:
+        try:
+            from foxglove_bridge import FoxgloveBridge
+            foxglove_bridge = FoxgloveBridge(robot)
+            foxglove_bridge.start()
+        except Exception as exc:
+            print(f"[server] Foxglove bridge unavailable: {exc}")
+
+    print(f"[server] MuJoCo mode: {'GUI' if RENDER_GUI else 'HEADLESS'}")
     print("[server] Starting Flask REST server on http://0.0.0.0:8765")
     print("[server] Endpoints:")
     print("[server]   POST /move_to  POST /pick  POST /place  POST /gripper")
     print("[server]   POST /reset_home  GET /state  GET /state/full")
     print("[server]   GET /camera  GET /collisions  POST /scenario")
-    app.run(
-        host="0.0.0.0",
-        port=8765,
-        debug=False,
-        use_reloader=False,   # Reloader would spawn a second RobotAPI instance
-        threaded=False,       # Single-threaded: prevents concurrent requests racing on shared robot state
-    )
+    try:
+        app.run(
+            host="0.0.0.0",
+            port=8765,
+            debug=False,
+            use_reloader=False,   # Reloader would spawn a second RobotAPI instance
+            threaded=False,       # Keep action requests serialized
+        )
+    finally:
+        if foxglove_bridge is not None:
+            foxglove_bridge.stop()
+        robot.close()
