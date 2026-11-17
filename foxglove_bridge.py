@@ -33,6 +33,7 @@ from foxglove.messages import (
     SceneEntity,
     SceneEntityDeletion,
     SceneUpdate,
+    SpherePrimitive,
     Timestamp,
     Vector3,
 )
@@ -289,29 +290,41 @@ class FoxgloveBridge:
             if not detection.get("visible") or xyz is None:
                 continue
             size = self.OBJECT_SIZES.get(name, (0.025, 0.025, 0.025))
-            entities.append(
-                SceneEntity(
+            pose = Pose(
+                position=Vector3(
+                    x=float(xyz[0]),
+                    y=float(xyz[1]),
+                    z=float(xyz[2] + size[2] / 2.0),
+                )
+            )
+            color = self.OBJECT_COLORS.get(
+                name, Color(r=0.9, g=0.9, b=0.9, a=0.8)
+            )
+            if name == "blue_sphere":
+                entity = SceneEntity(
+                    id=f"detected_{name}",
+                    frame_id="world",
+                    spheres=[
+                        SpherePrimitive(
+                            pose=pose,
+                            size=Vector3(x=size[0], y=size[1], z=size[2]),
+                            color=color,
+                        )
+                    ],
+                )
+            else:
+                entity = SceneEntity(
                     id=f"detected_{name}",
                     frame_id="world",
                     cubes=[
                         CubePrimitive(
-                            pose=Pose(
-                                position=Vector3(
-                                    x=float(xyz[0]),
-                                    y=float(xyz[1]),
-                                    z=float(xyz[2] + size[2] / 2.0),
-                                )
-                            ),
-                            size=Vector3(
-                                x=size[0], y=size[1], z=size[2]
-                            ),
-                            color=self.OBJECT_COLORS.get(
-                                name, Color(r=0.9, g=0.9, b=0.9, a=0.8)
-                            ),
+                            pose=pose,
+                            size=Vector3(x=size[0], y=size[1], z=size[2]),
+                            color=color,
                         )
                     ],
                 )
-            )
+            entities.append(entity)
         # Delete known IDs first so detections that disappear do not leave stale markers.
         deletions = [
             SceneEntityDeletion(timestamp=Timestamp.now(), id=f"detected_{name}")
