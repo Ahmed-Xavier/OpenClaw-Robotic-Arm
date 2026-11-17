@@ -45,7 +45,7 @@ RENDER_GUI = os.getenv("ARMY_RENDER", "0").strip().lower() in {"1", "true", "yes
 # ---------------------------------------------------------------------------
 # Global robot instance — created exactly once at startup, never per-request.
 # ---------------------------------------------------------------------------
-robot = RobotAPI(render=RENDER_GUI)
+robot = RobotAPI(render=RENDER_GUI, realtime=True)
 
 app = Flask(__name__)
 
