@@ -53,6 +53,7 @@ In Foxglove, choose **Open connection → Foxglove WebSocket** and enter
 | `/army/state` | JSON | Robot joints, gripper, objects, holding state and simulation time |
 | `/army/perception/objects` | JSON | AprilTag calibration result and detected object XYZ |
 | `/army/perception/scene` | `foxglove.SceneUpdate` | 3D object markers in the calibrated world frame |
+| `/army/perception/points` | `foxglove.PointCloud` | Downsampled colored depth cloud transformed into the world frame |
 
 The publisher currently runs at 8 Hz by default. Set `ARMY_FOXGLOVE_HZ`
 to change the rate. Camera rendering and perception use the existing
@@ -81,9 +82,10 @@ python server.py
 - The 3D scene currently shows detected objects, not a full articulated robot
   model. MuJoCo XML is not automatically a Foxglove robot description; robot
   link visualization needs an explicit model/transform export step.
-- Depth is streamed as a float32 image. Select the depth topic in an Image
-  panel; the 3D point-cloud view can be added once a calibrated point-cloud
-  publisher and camera/world transform are enabled.
+- Depth is streamed as a float32 image and as a downsampled colored point cloud.
+  The point cloud uses the camera-to-world transform computed from the four
+  AprilTags; set the 3D panel display frame to `world` and enable
+  `/army/perception/points`.
 - The bridge uses the existing AprilTag detector. If all four tags cannot be
   detected, object markers are withheld and the error is published on the
   detections topic.
