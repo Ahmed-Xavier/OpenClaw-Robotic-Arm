@@ -175,8 +175,12 @@ def state_full():
 
 @app.route("/camera", methods=["GET"])
 def camera():
-    """Capture an image from the wrist camera and return the file path."""
+    """Capture an image from a camera and return the file path.
+
+    Optional query param ?name=<camera> selects the camera (default wrist_camera).
+    """
     try:
+        camera_name = request.args.get("name", "wrist_camera")
         # Write to a temp file that persists after the call so the caller
         # can read it.  Using delete=False and a .png suffix.
         tmp = tempfile.NamedTemporaryFile(
@@ -184,7 +188,7 @@ def camera():
         )
         tmp.close()  # close so save_camera_image can write to it on Windows
 
-        saved_path = robot.save_camera_image(filepath=tmp.name)
+        saved_path = robot.save_camera_image(filepath=tmp.name, camera_name=camera_name)
         return _ok({"path": os.path.abspath(saved_path)})
     except Exception as e:
         return _err(e)

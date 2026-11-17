@@ -4,7 +4,7 @@
   <visual>
     <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
     <rgba haze="0.15 0.25 0.35 1"/>
-    <global azimuth="45" elevation="-20"/>
+    <global azimuth="45" elevation="-20" offwidth="1280" offheight="960"/>
   </visual>
 
   <asset>
@@ -18,11 +18,34 @@
     <material name="sphere_mat" rgba="0.15 0.55 0.95 1"/>
     <material name="target_mat_right" rgba="0.2 0.8 0.3 0.5"/>
     <material name="target_mat_left" rgba="0.2 0.4 0.9 0.5"/>
+    <material name="table_mat" rgba="0.5 0.5 0.5 1"/>
+
+    <!-- AprilTag marker textures and materials -->
+    <texture type="2d" name="apriltag_tex_0" file="assets/apriltags/tag36h11_0.png"/>
+    <texture type="2d" name="apriltag_tex_1" file="assets/apriltags/tag36h11_1.png"/>
+    <texture type="2d" name="apriltag_tex_2" file="assets/apriltags/tag36h11_2.png"/>
+    <texture type="2d" name="apriltag_tex_3" file="assets/apriltags/tag36h11_3.png"/>
+    <material name="apriltag_mat_0" texture="apriltag_tex_0"/>
+    <material name="apriltag_mat_1" texture="apriltag_tex_1"/>
+    <material name="apriltag_mat_2" texture="apriltag_tex_2"/>
+    <material name="apriltag_mat_3" texture="apriltag_tex_3"/>
   </asset>
 
   <worldbody>
     <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
-    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
+    <geom name="floor" size="0 0 0.05" type="plane" pos="0 0 -0.001" material="groundplane"/>
+
+    <!-- Table (top surface at z=0) -->
+    <geom name="table" type="box" size="0.45 0.30 0.01" pos="0 -0.20 -0.01" material="table_mat"/>
+
+    <!-- Overhead camera looking straight down -->
+    <camera name="top_camera" pos="0 -0.20 0.5" xyaxes="1 0 0 0 1 0" fovy="60"/>
+
+    <!-- AprilTag markers (flat, non-colliding) -->
+    <geom name="apriltag_0" type="box" size="0.02 0.02 0.0005" pos="-0.28 -0.07 0.0006" material="apriltag_mat_0" contype="0" conaffinity="0"/>
+    <geom name="apriltag_1" type="box" size="0.02 0.02 0.0005" pos="0.28 -0.07 0.0006" material="apriltag_mat_1" contype="0" conaffinity="0"/>
+    <geom name="apriltag_2" type="box" size="0.02 0.02 0.0005" pos="-0.28 -0.33 0.0006" material="apriltag_mat_2" contype="0" conaffinity="0"/>
+    <geom name="apriltag_3" type="box" size="0.02 0.02 0.0005" pos="0.28 -0.33 0.0006" material="apriltag_mat_3" contype="0" conaffinity="0"/>
 
     <!-- Manipulatable Cube 1 (Red) -->
     <body name="red_cube" pos="0 -0.22 0.015">
