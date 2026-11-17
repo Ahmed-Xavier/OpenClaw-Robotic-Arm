@@ -24,10 +24,10 @@ from foxglove.messages import (
     CameraCalibration,
     Color,
     CubePrimitive,
-    Duration,
     Pose,
     RawImage,
     SceneEntity,
+    SceneEntityDeletion,
     SceneUpdate,
     Vector3,
 )
@@ -232,7 +232,6 @@ class FoxgloveBridge:
                 SceneEntity(
                     id=f"detected_{name}",
                     frame_id="world",
-                    lifetime=Duration.from_secs(0.5),
                     cubes=[
                         CubePrimitive(
                             pose=Pose(
@@ -252,7 +251,12 @@ class FoxgloveBridge:
                     ],
                 )
             )
-        return SceneUpdate(entities=entities)
+        # Delete known IDs first so detections that disappear do not leave stale markers.
+        deletions = [
+            SceneEntityDeletion(id=f"detected_{name}")
+            for name in self.OBJECT_SIZES
+        ]
+        return SceneUpdate(deletions=deletions, entities=entities)
 
     def stop(self):
         """Stop publishing and release camera/server resources."""
