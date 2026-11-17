@@ -65,7 +65,7 @@ class FoxgloveBridge:
     ):
         self.robot = robot
         self.host = host or os.getenv("FOXGLOVE_HOST", "127.0.0.1")
-        self.port = int(port or os.getenv("FOXGLOVE_PORT", "8765"))
+        self.port = int(port or os.getenv("FOXGLOVE_PORT", "8766"))
         self.publish_hz = float(
             publish_hz or os.getenv("ARMY_FOXGLOVE_HZ", "8")
         )
@@ -205,7 +205,7 @@ class FoxgloveBridge:
                         log_time=now_ns,
                     )
                     # Empty updates let previous short-lived markers expire.
-                    self.scene_channel.log(SceneUpdate(), log_time=now_ns)
+                    self.scene_channel.log(self._make_scene({}), log_time=now_ns)
 
                 state_payload = dict(state)
                 state_payload["sim_time"] = sim_time
@@ -238,7 +238,7 @@ class FoxgloveBridge:
                                 position=Vector3(
                                     x=float(xyz[0]),
                                     y=float(xyz[1]),
-                                    z=float(xyz[2]),
+                                    z=float(xyz[2] + size[2] / 2.0),
                                 )
                             ),
                             size=Vector3(
