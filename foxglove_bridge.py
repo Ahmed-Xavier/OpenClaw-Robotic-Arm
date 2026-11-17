@@ -17,6 +17,7 @@ import foxglove
 from foxglove import Channel
 from foxglove.channels import (
     CameraCalibrationChannel,
+    PointCloudChannel,
     RawImageChannel,
     SceneUpdateChannel,
 )
@@ -24,6 +25,9 @@ from foxglove.messages import (
     CameraCalibration,
     Color,
     CubePrimitive,
+    PackedElementField,
+    PackedElementFieldNumericType,
+    PointCloud,
     Pose,
     RawImage,
     SceneEntity,
@@ -32,7 +36,7 @@ from foxglove.messages import (
     Vector3,
 )
 
-from perception import TopCameraPerception
+from perception import TopCameraPerception, deproject
 from sim_camera import SimTopCamera
 
 log = logging.getLogger("army.foxglove")
@@ -88,6 +92,7 @@ class FoxgloveBridge:
             "/army/perception/objects", message_encoding="json"
         )
         self.scene_channel = SceneUpdateChannel("/army/perception/scene")
+        self.pointcloud_channel = PointCloudChannel("/army/perception/points")
 
         self._server = None
         self._thread = None
@@ -194,6 +199,10 @@ class FoxgloveBridge:
                     self.scene_channel.log(
                         self._make_scene(objects), log_time=now_ns
                     )
+                    self.pointcloud_channel.log(
+                        self._make_pointcloud(rgb, depth, K, transform),
+                        log_time=now_ns,
+                    )
                 except Exception as exc:
                     self.detections_channel.log(
                         {
@@ -220,6 +229,57 @@ class FoxgloveBridge:
 
             remaining = period - (time.perf_counter() - cycle_start)
             self._stop.wait(max(0.0, remaining))
+
+
+    @staticmethod
+    def _make_pointcloud(rgb, depth, K, transform) -> PointCloud:
+        """Create a compact colored XYZ point cloud in the calibrated world frame."""
+        # Downsample the 640x480 stream to keep WebSocket bandwidth reasonable.
+        stride = 4
+        rgb_s = np.asarray(rgb, dtype=np.uint8)[::stride, ::stride]
+        depth_s = np.asarray(depth, dtype=np.float32)[::stride, ::stride]
+        h, w = depth_s.shape
+        vv, uu = np.mgrid[0:h, 0:w]
+        uu = uu.reshape(-1) * stride
+        vv = vv.reshape(-1) * stride
+        zz = depth_s.reshape(-1)
+        valid = np.isfinite(zz) & (zz > 0.0)
+        camera_points = deproject(uu[valid], vv[valid], zz[valid], K)
+        T = np.asarray(transform, dtype=np.float64)
+        world_points = camera_points @ T[:3, :3].T + T[:3, 3]
+        colors = rgb_s.reshape(-1, 3)[valid]
+
+        packed = np.empty(
+            world_points.shape[0],
+            dtype=np.dtype([
+                ("x", "<f4"), ("y", "<f4"), ("z", "<f4"),
+                ("r", "u1"), ("g", "u1"), ("b", "u1"), ("a", "u1"),
+            ], align=False),
+        )
+        packed["x"] = world_points[:, 0]
+        packed["y"] = world_points[:, 1]
+        packed["z"] = world_points[:, 2]
+        packed["r"] = colors[:, 0]
+        packed["g"] = colors[:, 1]
+        packed["b"] = colors[:, 2]
+        packed["a"] = 255
+
+        numeric = PackedElementFieldNumericType
+        fields = [
+            PackedElementField(name="x", offset=0, type=numeric.Float32),
+            PackedElementField(name="y", offset=4, type=numeric.Float32),
+            PackedElementField(name="z", offset=8, type=numeric.Float32),
+            PackedElementField(name="r", offset=12, type=numeric.Uint8),
+            PackedElementField(name="g", offset=13, type=numeric.Uint8),
+            PackedElementField(name="b", offset=14, type=numeric.Uint8),
+            PackedElementField(name="a", offset=15, type=numeric.Uint8),
+        ]
+        return PointCloud(
+            frame_id="world",
+            point_stride=16,
+            fields=fields,
+            data=packed.tobytes(),
+        )
 
     def _make_scene(self, objects: dict) -> SceneUpdate:
         entities = []
