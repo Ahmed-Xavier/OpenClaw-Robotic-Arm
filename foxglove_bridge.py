@@ -33,6 +33,7 @@ from foxglove.messages import (
     SceneEntity,
     SceneEntityDeletion,
     SceneUpdate,
+    Timestamp,
     Vector3,
 )
 
@@ -313,7 +314,7 @@ class FoxgloveBridge:
             )
         # Delete known IDs first so detections that disappear do not leave stale markers.
         deletions = [
-            SceneEntityDeletion(id=f"detected_{name}")
+            SceneEntityDeletion(timestamp=Timestamp.now(), id=f"detected_{name}")
             for name in self.OBJECT_SIZES
         ]
         return SceneUpdate(deletions=deletions, entities=entities)
