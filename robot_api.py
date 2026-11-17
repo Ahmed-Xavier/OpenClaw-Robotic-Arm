@@ -76,7 +76,7 @@ GRASP_LIFT_THRESHOLD_M = 0.025
 
 
 class RobotAPI:
-    def __init__(self, render=True, camera_width=640, camera_height=480):
+    def __init__(self, render=True, camera_width=640, camera_height=480, realtime=None):
         if not os.path.exists(_MODEL_PATH):
             raise FileNotFoundError(f"SO-100 model scene not found at {_MODEL_PATH}")
 
@@ -137,6 +137,7 @@ class RobotAPI:
         self._holding = False
         self._held_object = None
         self._render = render
+        self._realtime = bool(render if realtime is None else realtime)
         self._viewer = None
         self._running = True
         self._busy_moving = False
@@ -150,11 +151,14 @@ class RobotAPI:
             self._viewer = mujoco.viewer.launch_passive(self.model, self.data)
             self._sync()
 
-        # Physics runs independently of the optional interactive viewer.
-        self._sim_thread = threading.Thread(
-            target=self._keep_alive_loop, name="army-mujoco-physics", daemon=True
-        )
-        self._sim_thread.start()
+        # Physics can run independently of the optional interactive viewer.
+        # Keep the historical render=False behavior for deterministic tests;
+        # server.py explicitly opts into realtime headless stepping.
+        if self._realtime:
+            self._sim_thread = threading.Thread(
+                target=self._keep_alive_loop, name="army-mujoco-physics", daemon=True
+            )
+            self._sim_thread.start()
 
         print("[robot_api] SO-100 arm initialized and ready.")
 
