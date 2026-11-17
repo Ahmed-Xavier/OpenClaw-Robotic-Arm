@@ -7,3 +7,4 @@ robosuite==1.5.2
 gymnasium
 stable-baselines3
 torch
+foxglove-sdk>=0.29,<0.30
