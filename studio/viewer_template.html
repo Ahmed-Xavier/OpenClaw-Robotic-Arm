@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Army Perception Studio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin:0; height:100%; overflow:hidden; background:#14161a; color:#e8eaed;
+               font-family: system-ui, sans-serif; }
+  canvas { display:block; }
+  #hud   { position:fixed; top:10px; left:12px; font-size:12px; line-height:1.5; opacity:.9;
+           pointer-events:none; }
+  #hud b { font-size:14px; }
+  #bar   { position:fixed; top:10px; left:50%; transform:translateX(-50%); display:flex; gap:6px;
+           align-items:center; background:#222630cc; padding:6px 8px; border-radius:8px;
+           font-size:13px; flex-wrap:wrap; justify-content:center; max-width:90vw; }
+  #bar button { background:#2d3340; color:#e8eaed; border:1px solid #444c5c; border-radius:6px;
+                padding:5px 10px; cursor:pointer; font-size:13px; }
+  #bar button.on { background:#3b6fd4; border-color:#5b8ff0; }
+  #bar label { display:flex; gap:4px; align-items:center; cursor:pointer; margin-left:6px; }
+  #info  { position:fixed; left:12px; bottom:12px; width:min(470px, 92vw); background:#222630ee;
+           border:1px solid #3a4150; border-radius:8px; padding:10px 12px; }
+  #info pre { margin:0; font:12px/1.45 ui-monospace, Consolas, monospace; white-space:pre-wrap; }
+  #legend { position:fixed; right:12px; bottom:12px; font-size:12px; line-height:1.5; opacity:.85;
+            text-align:right; pointer-events:none; }
+</style>
+</head>
+<body>
+<div id="hud"></div>
+<div id="bar">
+  <button id="m-raw">Raw depth</button>
+  <button id="m-interp">Army's scene</button>
+  <button id="m-both">Both</button>
+  <label><input type="checkbox" id="c-truth"> sim truth</label>
+  <label><input type="checkbox" id="c-tags" checked> tags</label>
+  <label><input type="checkbox" id="c-cam" checked> camera view</label>
+  <button id="b-top">Top view</button>
+</div>
+<div id="info"><pre id="info-text">Click an object to print its coordinates.</pre></div>
+<div id="legend"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+const SNAP = __SNAPSHOT_JSON__;
+
+// ---------- helpers ----------
+const mm = (v, d = 1) => (v * 1000).toFixed(d);
+const COLORS = { red_cube: 0xe53935, green_cube: 0x43a047, yellow_cube: 0xfdd835, blue_sphere: 0x1e88e5 };
+
+function b64ToBuffer(b64) {
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8.buffer;
+}
+
+function makeLabel(text, scale) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(0, 8, 256, 48);
+  g.fillStyle = '#fff'; g.font = 'bold 28px sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 128, 33);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(c), depthTest: false, transparent: true }));
+  sp.scale.set(scale, scale / 4, 1);
+  sp.renderOrder = 10;
+  return sp;
+}
+
+// ---------- renderer / camera ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x14161a);
+const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.01, 10);
+camera.up.set(0, 0, 1);                       // robot frame: z is up
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI / 2 - 0.02;  // never go under the table
+controls.minDistance = 0.1;
+controls.maxDistance = 3;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+sun.position.set(0.3, -0.5, 1.0);
+scene.add(sun);
+
+// ---------- table area & grid ----------
+const corners = SNAP.camera.view_corners_on_table;
+const cx = corners.reduce((s, p) => s + p[0], 0) / 4;
+const cy = corners.reduce((s, p) => s + p[1], 0) / 4;
+const target = new THREE.Vector3(cx, cy, 0);
+
+(function buildGrid() {
+  const xs = corners.map(p => p[0]), ys = corners.map(p => p[1]);
+  const x0 = Math.floor(Math.min(...xs) / 0.05) * 0.05, x1 = Math.ceil(Math.max(...xs) / 0.05) * 0.05;
+  const y0 = Math.floor(Math.min(...ys) / 0.05) * 0.05, y1 = Math.ceil(Math.max(...ys) / 0.05) * 0.05;
+  const minor = [], major = [];
+  for (let x = x0; x <= x1 + 1e-9; x += 0.05) {
+    (Math.abs(Math.round(x * 10) - x * 10) < 1e-6 ? major : minor).push(x, y0, 0.0002, x, y1, 0.0002);
+  }
+  for (let y = y0; y <= y1 + 1e-9; y += 0.05) {
+    (Math.abs(Math.round(y * 10) - y * 10) < 1e-6 ? major : minor).push(x0, y, 0.0002, x1, y, 0.0002);
+  }
+  for (const [arr, col] of [[minor, 0x2a2f3a], [major, 0x454d5e]]) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
+    scene.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: col })));
+  }
+  const axes = new THREE.AxesHelper(0.06);    // robot base origin: x red, y green, z blue
+  axes.position.set(0, 0, 0.0005);
+  scene.add(axes);
+})();
+
+// ---------- tags ----------
+const tagsGroup = new THREE.Group();
+const pickables = [];
+for (const t of SNAP.tags) {
+  const [hx, hy] = t.half_size;
+  const outer = new THREE.Mesh(new THREE.PlaneGeometry(hx * 2, hy * 2),
+    new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  const inner = new THREE.Mesh(new THREE.PlaneGeometry(hx * 1.3, hy * 1.3),
+    new THREE.MeshBasicMaterial({ color: 0x111111 }));
+  inner.position.z = 0.0001;
+  const g = new THREE.Group();
+  g.add(outer, inner);
+  g.position.set(t.xyz[0], t.xyz[1], t.xyz[2] + 0.0003);
+  const label = makeLabel('tag ' + t.id, 0.05);
+  label.position.set(t.xyz[0], t.xyz[1], 0.02);
+  tagsGroup.add(g, label);
+  outer.userData = inner.userData = { kind: 'tag', tag: t };
+  pickables.push(outer, inner);
+}
+scene.add(tagsGroup);
+
+// ---------- camera view marker ----------
+const camGroup = new THREE.Group();
+{
+  const cp = SNAP.camera.position;
+  const pts = [];
+  for (let i = 0; i < 4; i++) {
+    const a = corners[i], b = corners[(i + 1) % 4];
+    pts.push(a[0], a[1], 0.0003, b[0], b[1], 0.0003);   // outline on the table
+    pts.push(cp[0], cp[1], cp[2], a[0], a[1], 0.0003);  // ray from the camera
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  camGroup.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x7a8aa8 })));
+}
+scene.add(camGroup);
+
+// ---------- raw depth cloud ----------
+const cloudGroup = new THREE.Group();
+{
+  const pos = new Float32Array(b64ToBuffer(SNAP.cloud.positions_f32_b64));
+  const u8 = new Uint8Array(b64ToBuffer(SNAP.cloud.colors_u8_b64));
+  const col = new Float32Array(u8.length);
+  for (let i = 0; i < u8.length; i++) col[i] = u8[i] / 255;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  cloudGroup.add(new THREE.Points(g, new THREE.PointsMaterial({
+    size: 0.003, vertexColors: true, sizeAttenuation: true })));
+}
+scene.add(cloudGroup);
+
+// ---------- Army's interpreted scene ----------
+// Measured: x, y, top height, silhouette seen from above (solid cap).
+// Guess:    the sides, drawn as the silhouette pushed straight down to the table (faded).
+const objGroup = new THREE.Group();
+const truthGroup = new THREE.Group();
+const objViews = [];
+for (const o of SNAP.objects) {
+  const color = COLORS[o.name] || 0xcccccc;
+  const tg = new THREE.Mesh(new THREE.SphereGeometry(0.004, 10, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true }));
+  tg.position.set(o.truth_xyz[0], o.truth_xyz[1], o.truth_xyz[2]);
+  truthGroup.add(tg);
+
+  if (!o.visible || !o.footprint) continue;
+  const shape = new THREE.Shape();
+  o.footprint.forEach((p, i) => (i ? shape.lineTo(p[0], p[1]) : shape.moveTo(p[0], p[1])));
+  shape.closePath();
+
+  const sides = new THREE.Mesh(
+    new THREE.ExtrudeGeometry(shape, { depth: o.top_z, bevelEnabled: false }),
+    new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.35,
+      roughness: 0.6, side: THREE.DoubleSide, depthWrite: false }));
+  const cap = new THREE.Mesh(new THREE.ShapeGeometry(shape),
+    new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
+  cap.position.z = o.top_z + 0.0001;
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(sides.geometry),
+    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 }));
+  const label = makeLabel(o.name, 0.06);
+  label.position.set(o.xyz[0], o.xyz[1] + 0.022, o.top_z + 0.005);
+
+  sides.userData = cap.userData = { kind: 'object', obj: o };
+  objGroup.add(sides, cap, edges, label);
+  pickables.push(sides, cap);
+  objViews.push({ o, sides, cap, edges });
+}
+scene.add(objGroup);
+scene.add(truthGroup);
+
+// selection pin
+const pin = new THREE.Mesh(new THREE.SphereGeometry(0.003, 12, 10),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false }));
+pin.renderOrder = 11; pin.visible = false;
+scene.add(pin);
+
+// ---------- text panel ----------
+const infoEl = document.getElementById('info-text');
+
+function describeObject(o) {
+  const L = [];
+  L.push(o.name);
+  L.push('frame: robot (tag frame)    units: mm');
+  L.push(`x, y       = ${mm(o.xyz[0])}, ${mm(o.xyz[1])}     measured`);
+  L.push(`top z      = ${mm(o.top_z)}     measured`);
+  L.push(`center z   = ${mm(o.xyz[2])}     perception (top z - known half size ${mm(o.half_height_prior)})`);
+  L.push(`center z   = ${mm(o.top_z / 2)}     viewer guess (top z / 2)`);
+  const xs = o.footprint.map(p => p[0]), ys = o.footprint.map(p => p[1]);
+  L.push(`footprint  = ${mm(Math.max(...xs) - Math.min(...xs))} x ${mm(Math.max(...ys) - Math.min(...ys))}     measured (top view, x by y)`);
+  L.push(`pixels     = ${o.n_pixels}`);
+  if (o.truth_xyz) {
+    const d = o.xyz.map((v, i) => v - o.truth_xyz[i]);
+    const d3 = Math.hypot(d[0], d[1], d[2]);
+    L.push(`sim truth  = ${mm(o.truth_xyz[0])}, ${mm(o.truth_xyz[1])}, ${mm(o.truth_xyz[2])}`);
+    L.push(`error      = dx ${mm(d[0], 2)}  dy ${mm(d[1], 2)}  dz ${mm(d[2], 2)}   3D ${mm(d3, 2)} mm`);
+  }
+  return L.join('\n');
+}
+
+function describeTag(t) {
+  const L = [];
+  L.push(`tag ${t.id}`);
+  L.push('frame: robot (tag frame)    units: mm');
+  L.push(`x, y, z    = ${mm(t.xyz[0])}, ${mm(t.xyz[1])}, ${mm(t.xyz[2], 2)}     known (from the scene file)`);
+  if (t.residual_mm != null) L.push(`residual   = ${t.residual_mm.toFixed(2)} mm     calibration fit error`);
+  return L.join('\n');
+}
+
+let selected = null;
+function select(userData) {
+  for (const v of objViews) {
+    const on = userData && userData.obj === v.o;
+    v.sides.material.opacity = on ? 0.7 : 0.35;
+    v.edges.material.opacity = on ? 1.0 : 0.35;
+  }
+  selected = userData;
+  if (!userData) { pin.visible = false; infoEl.textContent = 'Click an object to print its coordinates.'; return; }
+  let text;
+  if (userData.kind === 'object') {
+    const o = userData.obj;
+    pin.position.set(o.xyz[0], o.xyz[1], o.top_z + 0.0001);
+    pin.visible = true;
+    text = describeObject(o);
+  } else {
+    const t = userData.tag;
+    pin.position.set(t.xyz[0], t.xyz[1], t.xyz[2] + 0.0005);
+    pin.visible = true;
+    text = describeTag(t);
+  }
+  infoEl.textContent = text;
+  console.log(text);
+}
+
+// ---------- click picking (a drag is NOT a click) ----------
+const raycaster = new THREE.Raycaster();
+let down = null;
+renderer.domElement.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY }; });
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!down || e.button !== 0) return;
+  const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
+  down = null;
+  if (moved > 5) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1,
+                                -((e.clientY - rect.top) / rect.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  // Raycaster ignores .visible, so only test what is actually shown.
+  const live = pickables.filter(m => {
+    if (m.userData.kind === 'object') return objGroup.visible;
+    return tagsGroup.visible;
+  });
+  const hits = raycaster.intersectObjects(live, false);
+  select(hits.length ? hits[0].object.userData : null);
+});
+
+// ---------- modes & toggles ----------
+const btn = { raw: m('m-raw'), interp: m('m-interp'), both: m('m-both') };
+function m(id) { return document.getElementById(id); }
+function setMode(mode) {
+  cloudGroup.visible = mode === 'raw' || mode === 'both';
+  objGroup.visible = mode === 'interp' || mode === 'both';
+  for (const k in btn) btn[k].classList.toggle('on', k === mode);
+  if (!objGroup.visible && selected && selected.kind === 'object') select(null);
+}
+btn.raw.onclick = () => setMode('raw');
+btn.interp.onclick = () => setMode('interp');
+btn.both.onclick = () => setMode('both');
+m('c-truth').onchange = e => { truthGroup.visible = e.target.checked; };
+m('c-tags').onchange = e => { tagsGroup.visible = e.target.checked; };
+m('c-cam').onchange = e => { camGroup.visible = e.target.checked; };
+truthGroup.visible = false;
+
+// Default view: straight down, same "up" on screen as the physical camera image.
+function topView() {
+  const d = SNAP.camera.down;                         // image-down direction in robot frame
+  const up = new THREE.Vector3(-d[0], -d[1], 0).normalize();
+  camera.position.copy(target).add(new THREE.Vector3(-up.x * 0.002, -up.y * 0.002, 0.9));
+  controls.target.copy(target);
+  controls.update();
+}
+m('b-top').onclick = topView;
+
+// ---------- HUD ----------
+const meta = SNAP.meta;
+const missing = SNAP.objects.filter(o => !o.visible).map(o => o.name);
+m('hud').innerHTML =
+  `<b>Army Perception Studio</b><br>` +
+  `snapshot ${meta.created}${meta.layout != null ? ' &middot; layout ' + meta.layout : ''}<br>` +
+  `calibration residual (max): ${meta.calibration_residual_mm_max.toFixed(2)} mm<br>` +
+  `raw cloud: ${meta.n_cloud_points.toLocaleString()} points` +
+  (meta.depth_noise_sigma_m ? ` &middot; depth noise ${mm(meta.depth_noise_sigma_m)} mm` : '') +
+  (missing.length ? `<br><span style="color:#ff8a80">not detected: ${missing.join(', ')}</span>` : '');
+m('legend').innerHTML =
+  `drag = rotate &middot; wheel = zoom &middot; right-drag = pan &middot; click = select<br>` +
+  `solid top = measured &middot; faded sides = guess (top shape pushed down to the table)`;
+
+// ---------- go ----------
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+setMode('interp');
+topView();
+(function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+</script>
+</body>
+</html>
