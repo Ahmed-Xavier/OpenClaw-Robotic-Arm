@@ -1,0 +1,117 @@
+{
+  "test_number": 1,
+  "model": "nemotron-3-nano:4b",
+  "configuration": {
+    "thinking": false,
+    "num_ctx": 4096,
+    "max_rounds": 4
+  },
+  "events": [
+    {
+      "timestamp": "2026-11-17T14:17:22.651",
+      "event": "initial_state",
+      "state": {
+        "cube": [
+          0.0,
+          -0.22,
+          0.012
+        ],
+        "cube_in_workspace": true,
+        "eef": [
+          0.0,
+          -0.3468,
+          0.1988
+        ],
+        "gripper": "open",
+        "held_object": null,
+        "holding": false,
+        "objects": {
+          "cube_1": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_2": {
+            "in_workspace": true,
+            "position": [
+              -0.08,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_3": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.26,
+              0.012
+            ]
+          },
+          "sphere": {
+            "in_workspace": true,
+            "position": [
+              0.08,
+              -0.22,
+              0.014
+            ]
+          }
+        },
+        "robot": "ready",
+        "sphere": [
+          0.08,
+          -0.22,
+          0.014
+        ],
+        "sphere_dist_to_robot": 0.238,
+        "sphere_in_workspace": true
+      }
+    },
+    {
+      "timestamp": "2026-11-17T14:17:22.651",
+      "event": "agent_round_start",
+      "round": 1,
+      "max_rounds": 4
+    },
+    {
+      "timestamp": "2026-11-17T14:17:24.847",
+      "event": "model_response",
+      "elapsed_seconds": 2.195,
+      "prompt_eval_count": 1358,
+      "eval_count": 27,
+      "done_reason": "stop",
+      "thinking": "",
+      "content": "\n",
+      "tool_calls": [
+        {
+          "id": "call_zqvj5dyh",
+          "function": {
+            "index": 0,
+            "name": "pick",
+            "arguments": {
+              "target": "cube_2"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "timestamp": "2026-11-17T14:17:24.848",
+      "event": "tool_call",
+      "name": "pick",
+      "arguments": {
+        "target": "cube_2"
+      },
+      "round": 1
+    },
+    {
+      "timestamp": "2026-11-17T14:17:25.808",
+      "event": "test_error",
+      "error": "('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))"
+    }
+  ],
+  "status": "error",
+  "error": "('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))"
+}

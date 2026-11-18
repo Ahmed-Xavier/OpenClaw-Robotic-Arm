@@ -1,0 +1,972 @@
+{
+  "model": "nemotron-3-nano:4b",
+  "run_id": "20261117_141703",
+  "repository": "C:\\My files\\OpenClaw-Robotic-Arm",
+  "number_of_tests": 8,
+  "results": [
+    {
+      "test_number": 1,
+      "configuration": {
+        "thinking": false,
+        "num_ctx": 4096,
+        "max_rounds": 4
+      },
+      "status": "error",
+      "error": "('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))",
+      "log_file": "C:\\My files\\OpenClaw-Robotic-Arm\\benchmark_logs\\nemotron_20261117_141703\\test_01.json"
+    },
+    {
+      "test_number": 2,
+      "configuration": {
+        "thinking": false,
+        "num_ctx": 4096,
+        "max_rounds": 8
+      },
+      "status": "error",
+      "error": "400 Client Error: BAD REQUEST for url: http://127.0.0.1:8765/collisions",
+      "log_file": "C:\\My files\\OpenClaw-Robotic-Arm\\benchmark_logs\\nemotron_20261117_141703\\test_02.json"
+    },
+    {
+      "test_number": 3,
+      "configuration": {
+        "thinking": false,
+        "num_ctx": 8192,
+        "max_rounds": 4
+      },
+      "status": "error",
+      "error": "('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))",
+      "log_file": "C:\\My files\\OpenClaw-Robotic-Arm\\benchmark_logs\\nemotron_20261117_141703\\test_03.json"
+    },
+    {
+      "test_number": 4,
+      "configuration": {
+        "thinking": false,
+        "num_ctx": 8192,
+        "max_rounds": 8
+      },
+      "status": "completed",
+      "elapsed_seconds": 27.01,
+      "pick_attempts": 2,
+      "verified_success": true,
+      "initial_state": {
+        "cube": [
+          0.0,
+          -0.22,
+          0.012
+        ],
+        "cube_in_workspace": true,
+        "eef": [
+          -0.0,
+          -0.3468,
+          0.1988
+        ],
+        "gripper": "open",
+        "held_object": null,
+        "holding": false,
+        "objects": {
+          "cube_1": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_2": {
+            "in_workspace": true,
+            "position": [
+              -0.08,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_3": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.26,
+              0.012
+            ]
+          },
+          "sphere": {
+            "in_workspace": true,
+            "position": [
+              0.08,
+              -0.22,
+              0.014
+            ]
+          }
+        },
+        "robot": "ready",
+        "sphere": [
+          0.08,
+          -0.22,
+          0.014
+        ],
+        "sphere_dist_to_robot": 0.238,
+        "sphere_in_workspace": true
+      },
+      "final_state": {
+        "cube": [
+          0.0,
+          -0.22,
+          0.012
+        ],
+        "cube_in_workspace": true,
+        "eef": [
+          -0.082,
+          -0.2245,
+          0.0886
+        ],
+        "gripper": "closed",
+        "held_object": "cube_2",
+        "holding": true,
+        "objects": {
+          "cube_1": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_2": {
+            "in_workspace": true,
+            "position": [
+              -0.0842,
+              -0.2321,
+              0.0881
+            ]
+          },
+          "cube_3": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.26,
+              0.012
+            ]
+          },
+          "sphere": {
+            "in_workspace": true,
+            "position": [
+              0.08,
+              -0.22,
+              0.014
+            ]
+          }
+        },
+        "robot": "holding",
+        "sphere": [
+          0.08,
+          -0.22,
+          0.014
+        ],
+        "sphere_dist_to_robot": 0.1784,
+        "sphere_in_workspace": true
+      },
+      "final_collisions": {
+        "contacts": [
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "sphere_geom",
+            "geom2": "table"
+          },
+          {
+            "geom1": "fixed_jaw_pad_1",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "fixed_jaw_pad_1",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "moving_jaw_pad_1",
+            "geom2": "green_cube_geom"
+          }
+        ],
+        "in_contact": true
+      },
+      "final_reply": "The green cube (cube_2) was successfully picked up. The second attempt succeeded: the gripper is closed, holding cube_2, and the position heuristic confirms the object is lifted.",
+      "log_file": "C:\\My files\\OpenClaw-Robotic-Arm\\benchmark_logs\\nemotron_20261117_141703\\test_04.json"
+    },
+    {
+      "test_number": 5,
+      "configuration": {
+        "thinking": true,
+        "num_ctx": 4096,
+        "max_rounds": 4
+      },
+      "status": "completed",
+      "elapsed_seconds": 23.74,
+      "pick_attempts": 1,
+      "verified_success": false,
+      "initial_state": {
+        "cube": [
+          0.0,
+          -0.22,
+          0.012
+        ],
+        "cube_in_workspace": true,
+        "eef": [
+          0.0,
+          -0.3468,
+          0.1987
+        ],
+        "gripper": "open",
+        "held_object": null,
+        "holding": false,
+        "objects": {
+          "cube_1": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_2": {
+            "in_workspace": true,
+            "position": [
+              -0.08,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_3": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.26,
+              0.012
+            ]
+          },
+          "sphere": {
+            "in_workspace": true,
+            "position": [
+              0.08,
+              -0.22,
+              0.014
+            ]
+          }
+        },
+        "robot": "ready",
+        "sphere": [
+          0.08,
+          -0.22,
+          0.014
+        ],
+        "sphere_dist_to_robot": 0.2379,
+        "sphere_in_workspace": true
+      },
+      "final_state": {
+        "cube": [
+          0.0,
+          -0.22,
+          0.012
+        ],
+        "cube_in_workspace": true,
+        "eef": [
+          -0.0795,
+          -0.2186,
+          0.0891
+        ],
+        "gripper": "closed",
+        "held_object": null,
+        "holding": false,
+        "objects": {
+          "cube_1": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_2": {
+            "in_workspace": true,
+            "position": [
+              -0.0823,
+              -0.2261,
+              0.012
+            ]
+          },
+          "cube_3": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.26,
+              0.012
+            ]
+          },
+          "sphere": {
+            "in_workspace": true,
+            "position": [
+              0.08,
+              -0.22,
+              0.014
+            ]
+          }
+        },
+        "robot": "ready",
+        "sphere": [
+          0.08,
+          -0.22,
+          0.014
+        ],
+        "sphere_dist_to_robot": 0.1764,
+        "sphere_in_workspace": true
+      },
+      "final_collisions": {
+        "contacts": [
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "sphere_geom",
+            "geom2": "table"
+          }
+        ],
+        "in_contact": true
+      },
+      "final_reply": "",
+      "log_file": "C:\\My files\\OpenClaw-Robotic-Arm\\benchmark_logs\\nemotron_20261117_141703\\test_05.json"
+    },
+    {
+      "test_number": 6,
+      "configuration": {
+        "thinking": true,
+        "num_ctx": 4096,
+        "max_rounds": 8
+      },
+      "status": "completed",
+      "elapsed_seconds": 18.47,
+      "pick_attempts": 1,
+      "verified_success": false,
+      "initial_state": {
+        "cube": [
+          -0.0,
+          -0.22,
+          0.012
+        ],
+        "cube_in_workspace": true,
+        "eef": [
+          -0.0,
+          -0.3468,
+          0.1995
+        ],
+        "gripper": "open",
+        "held_object": null,
+        "holding": false,
+        "objects": {
+          "cube_1": {
+            "in_workspace": true,
+            "position": [
+              -0.0,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_2": {
+            "in_workspace": true,
+            "position": [
+              -0.08,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_3": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.26,
+              0.012
+            ]
+          },
+          "sphere": {
+            "in_workspace": true,
+            "position": [
+              0.08,
+              -0.22,
+              0.014
+            ]
+          }
+        },
+        "robot": "ready",
+        "sphere": [
+          0.08,
+          -0.22,
+          0.014
+        ],
+        "sphere_dist_to_robot": 0.2385,
+        "sphere_in_workspace": true
+      },
+      "final_state": {
+        "cube": [
+          0.0,
+          -0.22,
+          0.012
+        ],
+        "cube_in_workspace": true,
+        "eef": [
+          -0.0795,
+          -0.2186,
+          0.0892
+        ],
+        "gripper": "closed",
+        "held_object": null,
+        "holding": false,
+        "objects": {
+          "cube_1": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_2": {
+            "in_workspace": true,
+            "position": [
+              -0.0823,
+              -0.2261,
+              0.012
+            ]
+          },
+          "cube_3": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.26,
+              0.012
+            ]
+          },
+          "sphere": {
+            "in_workspace": true,
+            "position": [
+              0.08,
+              -0.22,
+              0.014
+            ]
+          }
+        },
+        "robot": "ready",
+        "sphere": [
+          0.08,
+          -0.22,
+          0.014
+        ],
+        "sphere_dist_to_robot": 0.1764,
+        "sphere_in_workspace": true
+      },
+      "final_collisions": {
+        "contacts": [
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "sphere_geom",
+            "geom2": "table"
+          }
+        ],
+        "in_contact": true
+      },
+      "final_reply": "",
+      "log_file": "C:\\My files\\OpenClaw-Robotic-Arm\\benchmark_logs\\nemotron_20261117_141703\\test_06.json"
+    },
+    {
+      "test_number": 7,
+      "configuration": {
+        "thinking": true,
+        "num_ctx": 8192,
+        "max_rounds": 4
+      },
+      "status": "completed",
+      "elapsed_seconds": 26.04,
+      "pick_attempts": 2,
+      "verified_success": true,
+      "initial_state": {
+        "cube": [
+          0.0,
+          -0.22,
+          0.012
+        ],
+        "cube_in_workspace": true,
+        "eef": [
+          -0.0,
+          -0.3468,
+          0.199
+        ],
+        "gripper": "open",
+        "held_object": null,
+        "holding": false,
+        "objects": {
+          "cube_1": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_2": {
+            "in_workspace": true,
+            "position": [
+              -0.08,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_3": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.26,
+              0.012
+            ]
+          },
+          "sphere": {
+            "in_workspace": true,
+            "position": [
+              0.08,
+              -0.22,
+              0.014
+            ]
+          }
+        },
+        "robot": "ready",
+        "sphere": [
+          0.08,
+          -0.22,
+          0.014
+        ],
+        "sphere_dist_to_robot": 0.2381,
+        "sphere_in_workspace": true
+      },
+      "final_state": {
+        "cube": [
+          0.0,
+          -0.22,
+          0.012
+        ],
+        "cube_in_workspace": true,
+        "eef": [
+          -0.0759,
+          -0.2117,
+          0.0889
+        ],
+        "gripper": "closed",
+        "held_object": "cube_2",
+        "holding": true,
+        "objects": {
+          "cube_1": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_2": {
+            "in_workspace": true,
+            "position": [
+              -0.0776,
+              -0.2164,
+              0.0875
+            ]
+          },
+          "cube_3": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.26,
+              0.012
+            ]
+          },
+          "sphere": {
+            "in_workspace": true,
+            "position": [
+              0.08,
+              -0.22,
+              0.014
+            ]
+          }
+        },
+        "robot": "holding",
+        "sphere": [
+          0.08,
+          -0.22,
+          0.014
+        ],
+        "sphere_dist_to_robot": 0.1731,
+        "sphere_in_workspace": true
+      },
+      "final_collisions": {
+        "contacts": [
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "sphere_geom",
+            "geom2": "table"
+          },
+          {
+            "geom1": "fixed_jaw_pad_1",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "fixed_jaw_pad_1",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "moving_jaw_pad_1",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "moving_jaw_pad_1",
+            "geom2": "green_cube_geom"
+          }
+        ],
+        "in_contact": true
+      },
+      "final_reply": "Maximum reasoning rounds reached.",
+      "log_file": "C:\\My files\\OpenClaw-Robotic-Arm\\benchmark_logs\\nemotron_20261117_141703\\test_07.json"
+    },
+    {
+      "test_number": 8,
+      "configuration": {
+        "thinking": true,
+        "num_ctx": 8192,
+        "max_rounds": 8
+      },
+      "status": "completed",
+      "elapsed_seconds": 29.36,
+      "pick_attempts": 1,
+      "verified_success": false,
+      "initial_state": {
+        "cube": [
+          0.0,
+          -0.22,
+          0.012
+        ],
+        "cube_in_workspace": true,
+        "eef": [
+          0.0,
+          -0.3468,
+          0.1988
+        ],
+        "gripper": "open",
+        "held_object": null,
+        "holding": false,
+        "objects": {
+          "cube_1": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_2": {
+            "in_workspace": true,
+            "position": [
+              -0.08,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_3": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.26,
+              0.012
+            ]
+          },
+          "sphere": {
+            "in_workspace": true,
+            "position": [
+              0.08,
+              -0.22,
+              0.014
+            ]
+          }
+        },
+        "robot": "ready",
+        "sphere": [
+          0.08,
+          -0.22,
+          0.014
+        ],
+        "sphere_dist_to_robot": 0.238,
+        "sphere_in_workspace": true
+      },
+      "final_state": {
+        "cube": [
+          0.0,
+          -0.22,
+          0.012
+        ],
+        "cube_in_workspace": true,
+        "eef": [
+          -0.0795,
+          -0.2186,
+          0.0891
+        ],
+        "gripper": "closed",
+        "held_object": null,
+        "holding": false,
+        "objects": {
+          "cube_1": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.22,
+              0.012
+            ]
+          },
+          "cube_2": {
+            "in_workspace": true,
+            "position": [
+              -0.0824,
+              -0.226,
+              0.012
+            ]
+          },
+          "cube_3": {
+            "in_workspace": true,
+            "position": [
+              0.0,
+              -0.26,
+              0.012
+            ]
+          },
+          "sphere": {
+            "in_workspace": true,
+            "position": [
+              0.08,
+              -0.22,
+              0.014
+            ]
+          }
+        },
+        "robot": "ready",
+        "sphere": [
+          0.08,
+          -0.22,
+          0.014
+        ],
+        "sphere_dist_to_robot": 0.1764,
+        "sphere_in_workspace": true
+      },
+      "final_collisions": {
+        "contacts": [
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "green_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "table",
+            "geom2": "yellow_cube_geom"
+          },
+          {
+            "geom1": "sphere_geom",
+            "geom2": "table"
+          }
+        ],
+        "in_contact": true
+      },
+      "final_reply": "",
+      "log_file": "C:\\My files\\OpenClaw-Robotic-Arm\\benchmark_logs\\nemotron_20261117_141703\\test_08.json"
+    }
+  ]
+}

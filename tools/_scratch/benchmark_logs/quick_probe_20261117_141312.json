@@ -1,0 +1,32 @@
+{
+  "model": "nemotron-3-nano:4b",
+  "run_id": "20261117_141312",
+  "configuration": {
+    "max_rounds": 6,
+    "max_pick_attempts": 2,
+    "max_physical_actions": 6,
+    "num_ctx": 8192,
+    "think": "default"
+  },
+  "pick_attempts": 0,
+  "physical_actions": 0,
+  "events": [
+    {
+      "timestamp": "2026-11-17T14:13:13.443",
+      "event": "model_info",
+      "model": "nemotron-3-nano:4b",
+      "thinking": {
+        "values": [
+          false,
+          true
+        ],
+        "default": true
+      }
+    },
+    {
+      "timestamp": "2026-11-17T14:13:15.485",
+      "event": "fatal_error",
+      "error": "launcher.py not found: C:\\My files\\OpenClaw-Robotic-Arm\\tools\\_scratch\\launcher.py"
+    }
+  ]
+}
